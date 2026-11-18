@@ -113,8 +113,8 @@ def sufficiency_node(deps: GraphDeps, min_score: float) -> Callable[[GraphState]
       문서를 읽고 판정한다(호출 1회, `llm_calls` +1). 리랭크가 꺼진 상태에서 질문당 호출이 1회 늘어난다는 스펙 6.4의 내용이다.
     - 문서가 하나도 없으면 어느 쪽이든 LLM을 부르지 않고 "부족"이다.
 
-    `min_score`는 Settings.rerank_min_score이고 평가셋 측정(Task 9)으로 정한다. 측정 전 임시값(0.0)에서는 리랭크 점수가
-    음수가 아닌 한 항상 "충분"이 된다는 점에 주의한다.
+    `min_score`는 Settings.rerank_min_score다. 평가셋 측정(Task 9, docs/step0-report.md 8절)에서 나온 일상어형 후보 0.15를
+    사용자가 정했다. 이 값은 작은 표본(정답 없는 질문 6건)에서 나온 것이라 Task 17에서 다시 잰다.
     부족하면 이유를 `failure_reason`에 남겨 재검색(refine)이 읽는다. 충분하면 `failure_reason`을 비운다.
     """
 
