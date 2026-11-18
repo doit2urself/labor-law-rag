@@ -8,7 +8,15 @@
 
 
 class QuotaExceeded(Exception):
-    """무료 호출 한도를 넘었다(HTTP 429 등). 사용자에게는 친절한 안내 문구를 보여 주고 사용 횟수는 차감하지 않는다."""
+    """무료 호출 한도를 넘었다(HTTP 429 등). 사용자에게는 친절한 안내 문구를 보여 주고 사용 횟수는 차감하지 않는다.
+
+    retry_after_s: 서비스가 "몇 초 뒤에 다시 시도하라"고 알려 준 값(초). 알려 주지 않으면 None.
+    재시도 간격을 정하거나 0단계 측정표에 적는 데 쓴다.
+    """
+
+    def __init__(self, message: str = "", *, retry_after_s: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after_s = retry_after_s
 
 
 class ExternalServiceError(Exception):
