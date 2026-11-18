@@ -15,6 +15,7 @@ from scripts.step0_probe import (
     build_gemini_embed_call,
     main,
     probe_limit,
+    read_env,
 )
 
 
@@ -162,6 +163,23 @@ def test_main_prints_result_and_never_prints_the_key(capsys):
     out = capsys.readouterr()
     assert code == 0 and "calls_ok=3" in out.out
     assert key not in out.out and key not in out.err
+
+
+# `.env`에 적은 키도 읽는다. 같은 이름이 환경 변수에도 있으면 환경 변수가 이긴다(앱 설정과 같은 우선순위).
+def test_read_env_uses_dotenv_and_lets_environ_win(tmp_path, monkeypatch):
+    dotenv = tmp_path / ".env"
+    dotenv.write_text("LABOR_GEMINI_API_KEY=from-file\nLABOR_COHERE_API_KEY=file-cohere\n", encoding="utf-8")
+    monkeypatch.delenv("LABOR_GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("LABOR_COHERE_API_KEY", "from-environ")
+    env = read_env(dotenv)
+    assert env["LABOR_GEMINI_API_KEY"] == "from-file"
+    assert env["LABOR_COHERE_API_KEY"] == "from-environ"
+
+
+# `.env` 파일이 없어도 오류 없이 환경 변수만 돌려준다.
+def test_read_env_without_dotenv_file_returns_environ(tmp_path, monkeypatch):
+    monkeypatch.setenv("LABOR_GEMINI_API_KEY", "only-environ")
+    assert read_env(tmp_path / "missing.env")["LABOR_GEMINI_API_KEY"] == "only-environ"
 
 
 # 키가 환경 변수에 없으면 어떤 변수를 채워야 하는지 알려 주고 종료 코드 2로 끝난다(호출하지 않는다).

@@ -4,11 +4,11 @@
 색인 예산(Task 7), 충분성 임계값(Task 11), 호출 상한(Task 13), 모델 선택(Task 17)이 모두 이 숫자에 기대므로
 구현 전에 직접 재서 `docs/step0-report.md`에 남긴다.
 
-사용법(프로젝트 루트에서, 키는 이 PC의 환경 변수로만 넣는다 — 대화·파일에 적지 않는다):
+사용법(프로젝트 루트에서, 키는 환경 변수 또는 git에 올라가지 않는 `.env`에만 넣는다 — 대화·커밋에 적지 않는다):
     python scripts/step0_probe.py gemini-chat   --model <모델> --max-calls 12
     python scripts/step0_probe.py gemini-embed  --model gemini-embedding-2 --max-calls 12
     python scripts/step0_probe.py cohere-rerank --model <모델> --max-calls 12
-필요한 환경 변수: Gemini는 LABOR_GEMINI_API_KEY, Cohere는 LABOR_COHERE_API_KEY.
+필요한 키 이름: Gemini는 LABOR_GEMINI_API_KEY, Cohere는 LABOR_COHERE_API_KEY (환경 변수가 `.env`보다 우선).
 
 설계 메모: 이 도구는 Task 7·8·10의 어댑터를 쓰지 않고 각 SDK의 최소 호출만 쓴다. 어댑터는 재시도·오류 변환이
 들어 있어서 "한도가 어디서 막히는지"를 가릴 수 있기 때문이다. 한도 초과(429)만 QuotaExceeded로 바꿔 멈춘다.
@@ -24,6 +24,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from dotenv import dotenv_values
 
 # `python scripts/step0_probe.py`로 직접 실행하면 sys.path[0]이 scripts/ 폴더라서 `import app`이 안 된다.
 # 프로젝트 루트를 import 경로에 넣어 어디서 실행해도 되게 한다.
@@ -199,6 +201,17 @@ DEFAULT_FACTORIES: dict[str, Factory] = {
 }
 
 
+def read_env(dotenv_path: Path | str = ".env") -> dict[str, str]:
+    """`.env` 파일과 환경 변수를 합쳐 돌려준다. 같은 이름이면 환경 변수가 이긴다.
+
+    왜 필요한가: 앱 설정(`app/config.py`)은 `.env`를 읽는데, 이 측정 도구는 환경 변수만 읽어서
+    `.env`에 넣은 키가 보이지 않았다. 같은 우선순위(환경 변수 > .env)로 맞춰 두 곳 어디에 넣어도 동작하게 한다.
+    파일이 없으면 환경 변수만 돌려준다. 키 값은 이 함수 안에서도 출력하지 않는다.
+    """
+    from_file = {k: v for k, v in dotenv_values(dotenv_path).items() if v is not None}
+    return {**from_file, **os.environ}
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -216,7 +229,8 @@ def main(
     parser.add_argument("--max-calls", type=int, default=12, help="최대 호출 수(무료 한도를 아끼려고 작게 둔다)")
     args = parser.parse_args(argv)
 
-    env = os.environ if env is None else env
+    # 테스트가 env를 직접 넘기면 .env를 읽지 않는다(진짜 키 파일이 테스트에 섞이지 않게 하려는 것).
+    env = read_env() if env is None else env
     factories = DEFAULT_FACTORIES if factories is None else factories
 
     key_name = KEY_ENV[args.kind]
