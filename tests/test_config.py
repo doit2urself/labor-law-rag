@@ -43,3 +43,8 @@ def test_env_variables_use_labor_prefix(monkeypatch):
 def test_checkpoint_file_is_separate_from_the_app_db():
     s = settings_factory()
     assert s.checkpoint_path == "data/checkpoints.db" and s.checkpoint_path != s.sqlite_path
+
+
+# Task 17 모델 비교(5개 후보, 일상어 질문 15건)에서 합격선을 넘은 가장 작은 모델을 기본값으로 쓴다(docs/step0-report.md 10절의 표).
+def test_default_llm_model_is_the_task17_choice():
+    assert settings_factory().llm_model == "gemini-3.1-flash-lite"

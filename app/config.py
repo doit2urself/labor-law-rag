@@ -26,7 +26,9 @@ class Settings(BaseSettings):
     # --- 모델 ---
     embedding_model: str = "gemini-embedding-2"
     embedding_dim: int = 768  # 낮은 차원으로 OpenSearch 메모리를 아낀다(스펙 6.2).
-    llm_model: str = "gemini-3.5-flash-lite"  # 임시값. Task 17의 모델 비교 뒤에 정한다.
+    # Task 17의 모델 비교(후보 5개, 일상어 질문 15건)에서 합격선(인용 0.80↑, 오거절 15%↓, 거절 0.80↑)을 넘은 모델 중 가장 작은 것.
+    # 5개 모두 넘었고 "작다"는 모델 이름(flash-lite)과 응답 속도로 본 추정이다. 전체 40건 재확인은 Task 17 Step 7(docs/results.md).
+    llm_model: str = "gemini-3.1-flash-lite"
 
     # --- 호출·사용 한도 ---
     test_ip_limit: int = 5  # `test` 계정이 같은 IP에서 쓸 수 있는 누적 횟수
