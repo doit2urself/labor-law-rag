@@ -17,7 +17,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from app.config import Settings
-from app.domain.models import Chunk, Hit
+from app.domain.models import Chunk, Hit, RerankResult
 
 
 def settings_factory(**overrides: Any) -> Settings:
@@ -120,6 +120,24 @@ class FakeReranker:
         ]
 
 
+class FakeRerankStage:
+    """RerankStage 가짜: 상위 `top_n`개를 순위 1부터 다시 매겨 돌려준다.
+
+    `used_reranker`/`reason`을 정해 두면 "한도 도달(cap)"·"오류(error)" 폴백 경로도 시험할 수 있다.
+    진짜 RerankGate(월 한도 게이트)는 tests/test_rerank_gate.py에서 따로 시험한다.
+    """
+
+    def __init__(self, *, used_reranker: bool = True, reason: str = "ok") -> None:
+        self._used_reranker = used_reranker
+        self._reason = reason
+        self.calls = 0
+
+    def rerank(self, query: str, hits: list[Hit], top_n: int = 5) -> RerankResult:
+        self.calls += 1
+        picked = [dataclasses.replace(h, rank=i) for i, h in enumerate(hits[:top_n], start=1)]
+        return RerankResult(picked, self._used_reranker, self._reason)  # type: ignore[arg-type]
+
+
 class FakeSearch:
     """생성자에 넣어 둔 후보를 그대로 돌려주는 검색기 (SearchPort).
 
@@ -174,3 +192,24 @@ class FakeIndex:
 
     def get(self, chunk_id: str) -> Chunk:
         return self._docs[chunk_id][0]
+
+
+def deps_with(llm: Any, **overrides: Any) -> Any:
+    """그래프 노드 테스트용 `GraphDeps`를 만든다. 넘기지 않은 의존성은 가짜 구현으로 채운다.
+
+    예: `deps_with(FakeLlm([...]), search=FakeSearch(hits))`처럼 시험에 필요한 것만 바꿔 끼운다.
+    `app.graph`는 Task 10에서 생기므로 import를 함수 안에 둔다(그래야 이 파일을 쓰는 다른 테스트가 영향받지 않는다).
+    """
+    from app.graph.deps import GraphDeps
+    from app.scope import COVERED_LAWS
+
+    values: dict[str, Any] = {
+        "llm": llm,
+        "embedder": FakeEmbedder(),
+        "search": FakeSearch([]),
+        "rerank": FakeRerankStage(),
+        "settings": settings_factory(),
+        "covered_laws": list(COVERED_LAWS),
+    }
+    values.update(overrides)
+    return GraphDeps(**values)
