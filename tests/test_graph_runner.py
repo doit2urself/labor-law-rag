@@ -18,11 +18,20 @@ from app.graph.build import build_graph
 from app.graph.nodes_analyze import Analysis
 from app.graph.nodes_answer import VERDICT_PREFACE
 from app.graph.nodes_verify import refusal_message
-from app.graph.runner import Final, Progress, answer_payload, refusal_payload, run_chat, run_config
+from app.graph.runner import (
+    AnswerDelta,
+    Final,
+    Progress,
+    StageDetail,
+    answer_payload,
+    refusal_payload,
+    run_chat,
+    run_config,
+)
 from app.graph.state import checkpoint_serde, reset_turn_update
 from app.scope import COVERED_LAWS
 from app.texts import DISCLAIMER, SOURCE_NOTICE
-from tests.conftest import FakeLlm, FakeSearch, deps_with, sample_hits
+from tests.conftest import FakeLlm, FakeSearch, deps_with, sample_hits, settings_factory
 
 
 def asdict_event(event) -> dict:
@@ -38,6 +47,10 @@ def run(deps, question: str = "주휴수당?", *, thread_id: str | None = None):
 
 def stages(events) -> list[str]:
     return [e.stage for e in events if isinstance(e, Progress)]
+
+
+def details(events) -> list[tuple[str, str]]:
+    return [(e.stage, e.text) for e in events if isinstance(e, StageDetail)]
 
 
 def schemas(llm) -> list[str]:
@@ -61,6 +74,79 @@ def test_happy_path_streams_progress_then_final_answer():
     assert deps.llm.call_count == 3  # 질문 분석, 생성, 검증
 
 
+# 단계가 끝난 뒤의 요약(StageDetail)이 해당 단계 시작(Progress) 바로 뒤에 나온다: 검색 → 찾은 조문, 근거 확인 → 충분함.
+def test_stage_details_follow_their_stage_and_summarise_it():
+    events, _, _ = run(deps_with(FakeLlm.script()))
+    kinds = [
+        ("진행", e.stage)
+        if isinstance(e, Progress)
+        else ("요약", e.stage)
+        if isinstance(e, StageDetail)
+        else ("텍스트",)
+        if isinstance(e, AnswerDelta)
+        else ("끝",)
+        for e in events
+    ]
+    assert kinds == [
+        ("진행", "analyze"),
+        ("진행", "search"), ("요약", "search"),
+        ("진행", "rerank"),
+        ("진행", "sufficiency"), ("요약", "sufficiency"),
+        ("진행", "generate"),
+        ("진행", "verify"),
+        ("텍스트",),
+        ("끝",),
+    ]  # fmt: skip
+    # 찾은 조문은 앞의 3개만 이름으로 보이고, 더 있으면 "…"를 붙인다(같은 법령명은 한 번만 쓴다).
+    assert details(events) == [("search", "근로기준법 제51조, 제52조, 제53조 …"), ("sufficiency", "충분함")]
+
+
+# 검색 결과가 없으면 요약도 그렇게 말한다.
+def test_search_detail_when_nothing_was_found():
+    events, _, _ = run(deps_with(FakeLlm.script(), search=FakeSearch([])))
+    assert details(events)[0] == ("search", "찾은 조문 없음")
+
+
+# 근거가 부족하다고 판단하면 요약이 "부족함"이고, 다시 찾는 단계의 라벨에 재시도 횟수(1/2)가 붙는다.
+def test_insufficient_evidence_is_summarised_and_retry_counter_is_shown():
+    deps = deps_with(FakeLlm.script(), settings=settings_factory(rerank_min_score=0.95))  # 점수 0.9 < 0.95 → 부족
+    events, _, _ = run(deps)
+    assert ("sufficiency", "부족함") in details(events)
+    searches = [e.label for e in events if isinstance(e, Progress) and e.stage == "search"]
+    assert "다시 찾는 중 (1/2)" in searches[1] and "(" not in searches[0]
+
+
+# 다시 쓰는 단계의 라벨에도 횟수가 붙는다.
+def test_regeneration_label_shows_the_counter():
+    events, _, _ = run(deps_with(FakeLlm.script(first_answer_citations=["doc9"])))
+    generates = [e.label for e in events if isinstance(e, Progress) and e.stage == "generate"]
+    assert generates[0] == "답변을 작성하는 중" and generates[1] == "답변을 다시 쓰는 중 (1/2)"
+
+
+# 화면에 보이는 텍스트는 스트리밍된다: 검증을 통과한 답변이 문장 단위(AnswerDelta)로 순서대로 먼저 나가고, 그다음 Final이 나간다.
+def test_verified_answer_text_is_streamed_before_final():
+    events, _, _ = run(deps_with(FakeLlm.script()))
+    deltas = [e for e in events if isinstance(e, AnswerDelta)]
+    assert deltas == [AnswerDelta("sentence", 0, "주휴수당은 유급휴일에 대한 임금입니다.")]
+    assert events.index(deltas[0]) == len(events) - 2  # Final 바로 앞이고, 검증 단계가 끝난 뒤다
+
+
+# 스트리밍된 조각을 이어 붙이면 Final의 텍스트와 정확히 같다(화면이 두 경로로 서로 다른 글을 보게 되면 안 된다).
+def test_streamed_text_equals_final_text_including_preface():
+    events, _, _ = run(deps_with(FakeLlm.script(qclass="verdict_request")), "제가 부당해고 맞죠?")
+    deltas = [e for e in events if isinstance(e, AnswerDelta)]
+    payload = events[-1].payload
+    assert (deltas[0].part, deltas[0].text) == ("preface", VERDICT_PREFACE)
+    assert [d.text for d in deltas] == [payload["preface"], *(s["text"] for s in payload["sentences"])]
+
+
+# 거절 문구도 같은 방식으로 스트리밍된다.
+def test_refusal_message_is_streamed_too():
+    events, _, _ = run(deps_with(FakeLlm.script(qclass="out_of_scope")), "전세 보증금 돌려받는 법")
+    deltas = [e for e in events if isinstance(e, AnswerDelta)]
+    assert deltas == [AnswerDelta("preface", 0, events[-1].payload["preface"])]
+
+
 # 검증을 통과하기 전의 초안은 어떤 이벤트에도 실려 나가지 않는다(스트리밍으로 답변이 새면 안 된다).
 def test_draft_text_never_reaches_client_events():
     llm = FakeLlm.script(first_answer_with_text="DRAFT-SENTINEL-123", verification_fails_once=True)
@@ -68,7 +154,9 @@ def test_draft_text_never_reaches_client_events():
     # 초안이 정말 만들어졌고(생성 호출이 두 번 = 첫 초안은 버려지고 다시 씀) 그런데도 어떤 이벤트에도 없다는 뜻이다.
     assert schemas(llm).count("GeneratedAnswer") == 2
     assert all(
-        "DRAFT-SENTINEL-123" not in json.dumps(asdict_event(e), ensure_ascii=False) for e in events if isinstance(e, Progress)
+        "DRAFT-SENTINEL-123" not in json.dumps(asdict_event(e), ensure_ascii=False)
+        for e in events
+        if isinstance(e, (Progress, StageDetail, AnswerDelta))
     )
     assert isinstance(events[-1], Final) and "DRAFT-SENTINEL-123" not in json.dumps(events[-1].payload, ensure_ascii=False)
 
@@ -149,7 +237,7 @@ def test_unsupported_answer_triggers_research_with_a_new_query():
     assert graph.get_state(run_config(tid)).values["research_count"] == 1
     assert stages(events).count("search") == 2  # 재검색도 "검색" 단계로 보이고,
     labels = [e.label for e in events if isinstance(e, Progress) and e.stage == "search"]
-    assert "다시" in labels[1] and "다시" not in labels[0]  # 두 번째는 "검색어를 바꿔 다시 찾는 중"
+    assert "다시" in labels[1] and "다시" not in labels[0]  # 두 번째는 "검색어를 바꿔 다시 찾는 중 (1/2)"
 
 
 # --- 사건 판단 요청 ----------------------------------------------------------------------------------

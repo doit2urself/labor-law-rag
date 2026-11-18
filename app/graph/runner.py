@@ -1,7 +1,7 @@
 """그래프 실행기: 질문 한 턴을 돌리고, 화면(API)으로 보낼 이벤트만 걸러서 내보낸다.
 
 역할: `run_chat`이 그래프를 `stream_mode="custom"`으로 실행한다. 이 모드에서는 노드가 직접 `get_stream_writer()`로
-쓴 값(Progress, Final)만 흘러나온다. 상태 전체(values)나 모델 토큰(messages)은 흘러나오지 않는다.
+쓴 값(Progress, StageDetail, AnswerDelta, Final)만 흘러나온다. 상태 전체(values)나 모델 토큰(messages)은 흘러나오지 않는다.
 사용처: API(Task 14)가 SSE로 중계하고, 평가 러너(Task 17)가 Final을 읽는다.
 
 핵심 개념 — 왜 custom 스트림만 쓰나(스펙 6.4):
@@ -26,19 +26,55 @@ from app.texts import DISCLAIMER, SOURCE_NOTICE
 RECURSION_LIMIT = 25
 
 
+Stage = Literal["analyze", "search", "rerank", "sufficiency", "generate", "verify"]
+
+
 @dataclass(frozen=True)
 class Progress:
-    """진행 상태 이벤트: 지금 어느 단계인지. 답변 내용은 담지 않는다."""
+    """진행 상태 이벤트: 어느 단계가 **시작**됐는지. 답변 내용은 담지 않는다."""
 
-    stage: Literal["analyze", "search", "rerank", "sufficiency", "generate", "verify"]
+    stage: Stage
     label: str
 
 
 @dataclass(frozen=True)
+class StageDetail:
+    """단계가 **끝난 뒤**의 한 줄 요약(예: 찾은 조문 이름, "충분함"). 화면은 그 단계의 가장 최근 줄 밑에 붙인다.
+
+    Progress와 따로 둔 이유: 요약(찾은 조문 등)은 단계가 끝나야 알 수 있는데 Progress는 시작할 때 나가기 때문이다.
+    답변 문장은 담지 않는다(조문 이름·판정 같은 짧은 요약만).
+    """
+
+    stage: Stage
+    text: str
+
+
+@dataclass(frozen=True)
+class AnswerDelta:
+    """화면에 보일 텍스트의 한 조각: **검증을 통과한** 답변(또는 확정된 거절 문구)을 순서대로 흘려보낸다.
+
+    part: "preface"(사건 판단 안내 서두 또는 거절 문구, index 0) 또는 "sentence"(답변 문장, index는 0부터).
+    이 이벤트는 통과·거절이 확정된 노드(finalize, refuse)만 낸다. 생성 중인 LLM 토큰을 그대로 흘려보내는 방식이 아니다 —
+    그 방식은 검증에서 떨어질 초안이 화면에 새므로(스펙 6.4) 쓰지 않는다. 조각을 이어 붙이면 Final의 텍스트와 같다.
+    """
+
+    part: Literal["preface", "sentence"]
+    index: int
+    text: str
+
+
+@dataclass(frozen=True)
 class Final:
-    """최종 이벤트: 화면에 보여 줄 답변 또는 거절. 질문 한 턴에 정확히 한 번 나온다."""
+    """최종 이벤트: 화면에 보여 줄 답변 또는 거절. 질문 한 턴에 정확히 한 번 나온다(AnswerDelta들 뒤에)."""
 
     payload: dict
+
+
+def answer_deltas(payload: dict) -> list[AnswerDelta]:
+    """최종 payload의 텍스트(서두, 문장들)를 스트리밍 조각으로 나눈다. 순서는 화면에 보이는 순서와 같다."""
+    deltas = [AnswerDelta("preface", 0, payload["preface"])] if payload["preface"] else []
+    deltas += [AnswerDelta("sentence", i, s["text"]) for i, s in enumerate(payload["sentences"])]
+    return deltas
 
 
 def run_config(thread_id: str) -> dict:
@@ -46,8 +82,8 @@ def run_config(thread_id: str) -> dict:
     return {"configurable": {"thread_id": thread_id}, "recursion_limit": RECURSION_LIMIT}
 
 
-def run_chat(graph: Any, thread_id: str, question: str) -> Iterator[Progress | Final]:
-    """질문 한 턴을 실행하며 Progress 이벤트들과 마지막 Final 하나를 차례로 내보낸다.
+def run_chat(graph: Any, thread_id: str, question: str) -> Iterator[Progress | StageDetail | AnswerDelta | Final]:
+    """질문 한 턴을 실행하며 Progress·StageDetail 이벤트, 통과한 텍스트(AnswerDelta), 마지막 Final 하나를 차례로 내보낸다.
 
     새 턴은 `reset_turn_update(question)`을 **일반 dict**로 넣는다(지난 턴의 카운터·검색 결과를 비운다).
     한도 초과·외부 서비스 오류는 잡지 않고 호출한 쪽(API)으로 올린다 — 사용자에게 보일 문구와 사용 횟수 차감 여부는 API가 정한다.

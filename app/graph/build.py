@@ -18,7 +18,9 @@
 핵심 개념 — 진행 이벤트를 노드 안이 아니라 "감싸는 함수"에서 낸다:
 노드 함수(Task 10~12)는 LangGraph 밖에서도 단독으로 시험할 수 있어야 하므로 스트림 쓰기 도구를 모른다. 이 파일의
 `_step`이 노드를 감싸서, 노드가 시작될 때 Progress를 쓴다. 최종 답변(Final)은 통과·거절이 확정된 두 노드(finalize,
-refuse)만 쓴다. 클라이언트에는 이 이벤트들만 나가므로(runner.py) 검증 전 초안이 새지 않는다.
+refuse)만 쓴다. 이 두 노드는 확정된 텍스트를 문장 단위 조각(AnswerDelta)으로 먼저 흘려보낸 뒤 Final을 쓴다 — 그래서 화면에는 글이
+점점 나타나지만 검증 전 초안은 새지 않는다. 노드가 끝난 뒤의 짧은 요약(StageDetail: 찾은 조문 이름, 충분함/부족함)도 이 감싸는 함수가 낸다.
+클라이언트에는 이 이벤트들만 나간다(runner.py).
 """
 
 from collections.abc import Callable
@@ -40,22 +42,58 @@ from app.graph.nodes_search import (
     sufficiency_node,
 )
 from app.graph.nodes_verify import RefusalKind, decide, refusal_message, verify_node
-from app.graph.runner import Final, Progress, answer_payload, refusal_payload
+from app.graph.runner import Final, Progress, StageDetail, answer_deltas, answer_payload, refusal_payload
 from app.graph.state import GraphState
+from app.ingest.parse_law import article_label
 
 
-def _step(stage: str, label: str | Callable[[GraphState], str], node: Callable[[GraphState], dict]):
-    """노드가 시작될 때 진행 이벤트(Progress)를 쓰고 노드를 실행하는 함수로 감싼다.
+def _step(
+    stage: str,
+    label: str | Callable[[GraphState], str],
+    node: Callable[[GraphState], dict],
+    detail: Callable[[GraphState, dict], str] | None = None,
+):
+    """노드를 감싸서 (1) 시작할 때 진행 이벤트(Progress)를, (2) 끝난 뒤 요약 이벤트(StageDetail)를 쓴다.
 
-    label이 함수면 상태를 보고 문구를 고른다(예: 재검색일 때는 "다시 찾는 중").
+    label이 함수면 상태를 보고 문구를 고른다(예: 재검색일 때는 "다시 찾는 중 (1/2)").
+    detail은 (시작 때의 상태, 노드가 돌려준 갱신)을 받아 한 줄 요약을 만든다. 요약은 짧은 조문 이름·판정만 담고
+    답변 문장은 담지 않는다.
     """
 
     def run(state: GraphState) -> dict:
-        text = label(state) if callable(label) else label
-        get_stream_writer()(Progress(stage, text))  # type: ignore[arg-type]
-        return node(state)
+        writer = get_stream_writer()
+        writer(Progress(stage, label(state) if callable(label) else label))  # type: ignore[arg-type]
+        update = node(state)
+        if detail is not None:
+            writer(StageDetail(stage, detail(state, update)))  # type: ignore[arg-type]
+        return update
 
     return run
+
+
+def _found_articles(_state: GraphState, update: dict) -> str:
+    """검색 단계 요약: 찾은 조문 앞의 3개를 이름으로 보이고 더 있으면 "…"를 붙인다. 같은 법령명은 한 번만 쓴다.
+
+    예: "근로기준법 제55조, 제56조, 제50조 …". 후보 20개 전체가 아니라 앞의 3개만 보여 주는 것은 한 줄로 읽히게 하려는 것이다.
+    """
+    hits = update.get("candidates", [])
+    if not hits:
+        return "찾은 조문 없음"
+    parts: list[str] = []
+    previous_law = None
+    for hit in hits[:3]:
+        chunk = hit.chunk
+        name = article_label(chunk.article_no) if chunk.article_no else chunk.title
+        if chunk.law_name and chunk.law_name != previous_law:
+            name = f"{chunk.law_name} {name}"
+        parts.append(name)
+        previous_law = chunk.law_name
+    return ", ".join(parts) + (" …" if len(hits) > 3 else "")
+
+
+def _sufficiency_summary(_state: GraphState, update: dict) -> str:
+    """근거 확인 단계 요약: "충분함" 또는 "부족함"."""
+    return "충분함" if update.get("sufficient") else "부족함"
 
 
 def _history_update(state: GraphState, assistant_text: str) -> dict:
@@ -72,6 +110,16 @@ def build_graph(deps: GraphDeps, checkpointer):
     settings = deps.settings
     covered_laws = deps.covered_laws
 
+    def _emit_final(payload: dict) -> None:
+        """확정된 텍스트를 조각(AnswerDelta)으로 먼저 흘려보내고, 마지막에 Final을 보낸다.
+
+        조각은 통과·거절이 확정된 여기서만 나가므로 검증 전 초안은 어디로도 새지 않는다.
+        """
+        writer = get_stream_writer()
+        for delta in answer_deltas(payload):
+            writer(delta)
+        writer(Final(payload))
+
     def count_regen(state: GraphState) -> dict:
         """다시 쓰기로 정했을 때 횟수를 1 올린다. (갈림길 함수는 상태를 바꿀 수 없어서 별도 노드가 한다.)"""
         return {"regen_count": state.get("regen_count", 0) + 1}
@@ -79,7 +127,7 @@ def build_graph(deps: GraphDeps, checkpointer):
     def finalize(state: GraphState) -> dict:
         """검증을 통과한 답변을 최종 이벤트로 내보내고 이력에 남긴다."""
         payload = answer_payload(state)
-        get_stream_writer()(Final(payload))
+        _emit_final(payload)
         spoken = " ".join(filter(None, [payload["preface"], *(s["text"] for s in payload["sentences"])]))
         return _history_update(state, spoken)
 
@@ -87,7 +135,7 @@ def build_graph(deps: GraphDeps, checkpointer):
         """거절 안내를 최종 이벤트로 내보내고 이력에 남긴다. 거절 종류는 질문 분류와 남은 예산으로 정한다."""
         kind = _refusal_kind(state)
         message = refusal_message(kind, covered_laws)
-        get_stream_writer()(Final(refusal_payload(message)))
+        _emit_final(refusal_payload(message))
         return _history_update(state, message)
 
     def _refusal_kind(state: GraphState) -> RefusalKind:
@@ -110,21 +158,35 @@ def build_graph(deps: GraphDeps, checkpointer):
         "retrieve",
         _step(
             "search",
-            lambda s: "검색어를 바꿔 다시 찾는 중" if s.get("research_count", 0) else "법령 조문을 찾는 중",
+            lambda s: (
+                f"검색어를 바꿔 다시 찾는 중 ({s['research_count']}/{settings.max_research})"
+                if s.get("research_count", 0)
+                else "법령 조문을 찾는 중"
+            ),
             retrieve_node(deps),
+            _found_articles,
         ),
     )
     builder.add_node("rerank", _step("rerank", "관련도가 높은 조문을 고르는 중", rerank_node(deps)))
     builder.add_node(
         "sufficiency",
-        _step("sufficiency", "근거가 충분한지 확인하는 중", sufficiency_node(deps, settings.rerank_min_score)),
+        _step(
+            "sufficiency",
+            "근거가 충분한지 확인하는 중",
+            sufficiency_node(deps, settings.rerank_min_score),
+            _sufficiency_summary,
+        ),
     )
     builder.add_node("refine", refine_node(deps))  # 검색어만 바꾸는 일이라 따로 진행 이벤트를 내지 않는다(곧 이어지는 retrieve가 낸다)
     builder.add_node(
         "generate",
         _step(
             "generate",
-            lambda s: "답변을 다시 쓰는 중" if s.get("regen_count", 0) else "답변을 작성하는 중",
+            lambda s: (
+                f"답변을 다시 쓰는 중 ({s['regen_count']}/{settings.max_regen})"
+                if s.get("regen_count", 0)
+                else "답변을 작성하는 중"
+            ),
             generate_node(deps),
         ),
     )
