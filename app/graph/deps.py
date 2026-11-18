@@ -11,7 +11,7 @@
 from dataclasses import dataclass
 
 from app.config import Settings
-from app.ports import EmbedderPort, LlmPort, RerankStage, SearchPort
+from app.ports import EmbedderPort, EventSink, LlmPort, RerankStage, SearchPort
 
 
 @dataclass(frozen=True)
@@ -19,6 +19,7 @@ class GraphDeps:
     """그래프 한 벌이 쓰는 부품 모음. frozen이라 만든 뒤 몰래 바뀌지 않는다.
 
     covered_laws: 수집·색인한 법령 이름 목록. 질문 분석이 "근로 분야지만 수집 범위 밖"을 가려내는 기준이다.
+    sink: 수동 기록 이벤트를 받는 곳(Langfuse 등). 없으면(None) 기록하지 않는다. 그래프가 마스킹한 값만 넘긴다.
     """
 
     llm: LlmPort
@@ -27,3 +28,4 @@ class GraphDeps:
     rerank: RerankStage
     settings: Settings
     covered_laws: list[str]
+    sink: EventSink | None = None

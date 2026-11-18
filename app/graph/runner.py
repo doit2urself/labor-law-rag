@@ -82,15 +82,21 @@ def run_config(thread_id: str) -> dict:
     return {"configurable": {"thread_id": thread_id}, "recursion_limit": RECURSION_LIMIT}
 
 
-def run_chat(graph: Any, thread_id: str, question: str) -> Iterator[Progress | StageDetail | AnswerDelta | Final]:
+def run_chat(
+    graph: Any, thread_id: str, question: str, config_extra: dict | None = None
+) -> Iterator[Progress | StageDetail | AnswerDelta | Final]:
     """질문 한 턴을 실행하며 Progress·StageDetail 이벤트, 통과한 텍스트(AnswerDelta), 마지막 Final 하나를 차례로 내보낸다.
 
     새 턴은 `reset_turn_update(question)`을 **일반 dict**로 넣는다(지난 턴의 카운터·검색 결과를 비운다).
     한도 초과·외부 서비스 오류는 잡지 않고 호출한 쪽(API)으로 올린다 — 사용자에게 보일 문구와 사용 횟수 차감 여부는 API가 정한다.
     Final 없이 그래프가 끝나면 조용히 넘어가지 않고 RuntimeError를 낸다(조립 실수를 바로 드러낸다).
+
+    config_extra: 호출 설정에 더할 값(예: Langfuse 콜백, 실행 이름, 메타데이터). **우리 설정이 이긴다** — 대화 번호
+    (`configurable`)와 재귀 한도(`recursion_limit`)는 이 인자로 바꿀 수 없다(다른 대화 번호로 새거나 안전망이 풀리는 일을 막는다).
     """
     got_final = False
-    for event in graph.stream(reset_turn_update(question), run_config(thread_id), stream_mode="custom"):
+    config = {**(config_extra or {}), **run_config(thread_id)}
+    for event in graph.stream(reset_turn_update(question), config, stream_mode="custom"):
         if isinstance(event, Final):
             got_final = True
         yield event

@@ -23,6 +23,7 @@ refuse)만 쓴다. 이 두 노드는 확정된 텍스트를 문장 단위 조각
 클라이언트에는 이 이벤트들만 나간다(runner.py).
 """
 
+import logging
 from collections.abc import Callable
 
 from langgraph.config import get_stream_writer
@@ -45,6 +46,80 @@ from app.graph.nodes_verify import RefusalKind, decide, refusal_message, verify_
 from app.graph.runner import Final, Progress, StageDetail, answer_deltas, answer_payload, refusal_payload
 from app.graph.state import GraphState
 from app.ingest.parse_law import article_label
+from app.observability.masking import mask_value
+from app.ports import EventSink
+
+logger = logging.getLogger(__name__)
+
+Record = Callable[[str, dict], None]
+
+
+def _make_recorder(sink: EventSink | None) -> Record:
+    """수동 기록 함수를 만든다: `record(이름, 내용)`.
+
+    핵심 개념 — 기록은 **마스킹을 거쳐서** 나가고, **실패해도 서비스를 멈추지 않는다**:
+    - 내용은 sink에 넘기기 전에 `mask_value`로 개인정보를 가린다. LLM에 가는 입력과는 따로 만들어지는 값이라, LLM에는 원문이 가고
+      기록에는 가려진 값만 남는다(스펙 6.7: 기록에만 적용, LLM 입력에는 적용하지 않음).
+    - sink가 예외를 내면(Langfuse 장애 등) 경고만 남기고 넘어간다. 관측이 답변을 막으면 안 된다. 경고에는 예외 **종류**만 쓴다
+      (예외 메시지에 질문 내용이 섞일 수 있어서).
+    """
+
+    def record(name: str, payload: dict) -> None:
+        if sink is None:
+            return
+        try:
+            sink(name, mask_value(payload))
+        except Exception as error:
+            logger.warning("기록 이벤트 '%s'를 남기지 못했습니다 (%s)", name, type(error).__name__)
+
+    return record
+
+
+# ---- 단계별 기록 내용: (노드가 끝난 뒤의 상태) → 기록할 dict. 구조적인 값만 담고 답변 문장은 담지 않는다. ----
+
+
+def _trace_analyze(state: GraphState) -> dict:
+    return {
+        "qclass": state.get("qclass"),
+        "rewritten_query": state.get("rewritten_query"),
+        "llm_calls": state.get("llm_calls", 0),
+    }
+
+
+def _trace_search(state: GraphState) -> dict:
+    return {"candidates": len(state.get("candidates", [])), "attempt": state.get("research_count", 0)}
+
+
+def _trace_rerank(state: GraphState) -> dict:
+    """리랭크 기록. fallback = 결과는 있는데 리랭커를 못 써서 RRF 순위로 대신했다는 뜻이다(월 한도·오류)."""
+    kept = len(state.get("reranked", []))
+    used = bool(state.get("used_reranker"))
+    return {"kept": kept, "used_reranker": used, "fallback": kept > 0 and not used}
+
+
+def _trace_sufficiency(state: GraphState) -> dict:
+    return {"sufficient": bool(state.get("sufficient")), "llm_calls": state.get("llm_calls", 0)}
+
+
+def _trace_verify(state: GraphState) -> dict:
+    verification = state.get("verification")
+    return {
+        "sentences_ok": list(verification.sentences_ok) if verification else None,
+        "verdict_found": verification.verdict_found if verification else None,
+        "llm_calls": state.get("llm_calls", 0),
+    }
+
+
+def _final_record(state: GraphState, *, refused: bool, kind: str, sources: int) -> dict:
+    """질문 한 턴의 최종 결과 기록: 통과/거절, 거절 종류, 인용한 출처 수, 호출·재시도 횟수."""
+    return {
+        "refused": refused,
+        "kind": kind,
+        "sources": sources,
+        "llm_calls": state.get("llm_calls", 0),
+        "regen_count": state.get("regen_count", 0),
+        "research_count": state.get("research_count", 0),
+    }
 
 
 def _step(
@@ -52,12 +127,16 @@ def _step(
     label: str | Callable[[GraphState], str],
     node: Callable[[GraphState], dict],
     detail: Callable[[GraphState, dict], str] | None = None,
+    *,
+    record: Record | None = None,
+    trace: Callable[[GraphState], dict] | None = None,
 ):
     """노드를 감싸서 (1) 시작할 때 진행 이벤트(Progress)를, (2) 끝난 뒤 요약 이벤트(StageDetail)를 쓴다.
 
     label이 함수면 상태를 보고 문구를 고른다(예: 재검색일 때는 "다시 찾는 중 (1/2)").
     detail은 (시작 때의 상태, 노드가 돌려준 갱신)을 받아 한 줄 요약을 만든다. 요약은 짧은 조문 이름·판정만 담고
     답변 문장은 담지 않는다.
+    record·trace를 주면 노드가 끝난 뒤 `trace(끝난 뒤의 상태)`를 stage 이름으로 기록한다(화면에 나가는 이벤트와는 별개다).
     """
 
     def run(state: GraphState) -> dict:
@@ -66,6 +145,8 @@ def _step(
         update = node(state)
         if detail is not None:
             writer(StageDetail(stage, detail(state, update)))  # type: ignore[arg-type]
+        if record is not None and trace is not None:
+            record(stage, trace({**state, **update}))  # type: ignore[arg-type]
         return update
 
     return run
@@ -109,6 +190,7 @@ def build_graph(deps: GraphDeps, checkpointer):
     """노드를 연결해 컴파일된 그래프를 돌려준다. checkpointer는 대화 상태를 저장하는 곳(운영: SQLite, 테스트: 메모리)."""
     settings = deps.settings
     covered_laws = deps.covered_laws
+    record = _make_recorder(deps.sink)
 
     def _emit_final(payload: dict) -> None:
         """확정된 텍스트를 조각(AnswerDelta)으로 먼저 흘려보내고, 마지막에 Final을 보낸다.
@@ -127,6 +209,7 @@ def build_graph(deps: GraphDeps, checkpointer):
     def finalize(state: GraphState) -> dict:
         """검증을 통과한 답변을 최종 이벤트로 내보내고 이력에 남긴다."""
         payload = answer_payload(state)
+        record("final", _final_record(state, refused=False, kind="answer", sources=len(payload["sources"])))
         _emit_final(payload)
         spoken = " ".join(filter(None, [payload["preface"], *(s["text"] for s in payload["sentences"])]))
         return _history_update(state, spoken)
@@ -135,6 +218,7 @@ def build_graph(deps: GraphDeps, checkpointer):
         """거절 안내를 최종 이벤트로 내보내고 이력에 남긴다. 거절 종류는 질문 분류와 남은 예산으로 정한다."""
         kind = _refusal_kind(state)
         message = refusal_message(kind, covered_laws)
+        record("final", _final_record(state, refused=True, kind=kind, sources=0))
         _emit_final(refusal_payload(message))
         return _history_update(state, message)
 
@@ -148,12 +232,28 @@ def build_graph(deps: GraphDeps, checkpointer):
             return "limit"  # 호출 예산이 바닥나서 답변 한 번(생성+검증)을 더 할 수 없다
         return "no_evidence"
 
+    def route(state: GraphState) -> str:
+        """갈림길(decide)의 결과를 정하고, 그 결과와 이유(코드 검사 위반, 실패 원인, 카운터)를 기록한다."""
+        outcome = decide(state, settings)
+        record(
+            "branch",
+            {
+                "outcome": outcome,
+                "violations": [violation.code for violation in state.get("violations", [])],
+                "failure_reason": state.get("failure_reason"),
+                "regen_count": state.get("regen_count", 0),
+                "research_count": state.get("research_count", 0),
+                "llm_calls": state.get("llm_calls", 0),
+            },
+        )
+        return outcome
+
     def after_check(state: GraphState) -> str:
         """코드 검사 뒤: 위반이 있으면 LLM 검증을 건너뛰고 바로 갈림길로, 없으면 LLM 검증으로."""
-        return decide(state, settings) if state.get("violations") else "verify"
+        return route(state) if state.get("violations") else "verify"
 
     builder = StateGraph(GraphState)
-    builder.add_node("analyze", _step("analyze", "질문을 분석하는 중", analyze_node(deps)))
+    builder.add_node("analyze", _step("analyze", "질문을 분석하는 중", analyze_node(deps), record=record, trace=_trace_analyze))
     builder.add_node(
         "retrieve",
         _step(
@@ -165,9 +265,11 @@ def build_graph(deps: GraphDeps, checkpointer):
             ),
             retrieve_node(deps),
             _found_articles,
+            record=record,
+            trace=_trace_search,
         ),
     )
-    builder.add_node("rerank", _step("rerank", "관련도가 높은 조문을 고르는 중", rerank_node(deps)))
+    builder.add_node("rerank", _step("rerank", "관련도가 높은 조문을 고르는 중", rerank_node(deps), record=record, trace=_trace_rerank))
     builder.add_node(
         "sufficiency",
         _step(
@@ -175,6 +277,8 @@ def build_graph(deps: GraphDeps, checkpointer):
             "근거가 충분한지 확인하는 중",
             sufficiency_node(deps, settings.rerank_min_score),
             _sufficiency_summary,
+            record=record,
+            trace=_trace_sufficiency,
         ),
     )
     builder.add_node("refine", refine_node(deps))  # 검색어만 바꾸는 일이라 따로 진행 이벤트를 내지 않는다(곧 이어지는 retrieve가 낸다)
@@ -191,7 +295,7 @@ def build_graph(deps: GraphDeps, checkpointer):
         ),
     )
     builder.add_node("check", check_node())  # 코드 검사는 순식간이라 진행 이벤트가 없다
-    builder.add_node("verify", _step("verify", "답변이 근거와 맞는지 확인하는 중", verify_node(deps)))
+    builder.add_node("verify", _step("verify", "답변이 근거와 맞는지 확인하는 중", verify_node(deps), record=record, trace=_trace_verify))
     builder.add_node("count_regen", count_regen)
     builder.add_node("finalize", finalize)
     builder.add_node("refuse", refuse)
@@ -211,7 +315,7 @@ def build_graph(deps: GraphDeps, checkpointer):
     builder.add_edge("generate", "check")
     outcomes = {"pass": "finalize", "regenerate": "count_regen", "research": "refine", "refuse": "refuse"}
     builder.add_conditional_edges("check", after_check, {"verify": "verify", **outcomes})
-    builder.add_conditional_edges("verify", lambda s: decide(s, settings), outcomes)
+    builder.add_conditional_edges("verify", route, outcomes)
     builder.add_edge("count_regen", "generate")
     builder.add_edge("finalize", END)
     builder.add_edge("refuse", END)

@@ -21,6 +21,7 @@ from app.adapters.opensearch_store import OpenSearchStore
 from app.adapters.sqlite_store import AppStore
 from app.api.main import create_app
 from app.container import build_deps, build_graph_factory, make_checkpointer
+from app.observability.langfuse_setup import LangfuseTracing, NullTracing
 from app.domain.models import Chunk, Hit
 from app.graph.build import build_graph
 from app.graph.runner import run_chat
@@ -108,6 +109,15 @@ def test_checkpointer_restores_domain_objects_quietly_and_survives_restart(tmp_p
     assert "주휴수당이 뭐야?" in analysis[0]
 
 
+# 관측 연결(tracing)을 주면 그 기록 함수가 그래프의 sink가 되고, 주지 않으면 sink가 없다(기록하지 않는다).
+def test_build_deps_wires_the_tracing_as_sink(tmp_path):
+    settings = container_settings(tmp_path)
+    store = AppStore(settings.sqlite_path)
+    tracing = NullTracing()
+    assert build_deps(settings, store, tracing).sink == tracing.record_event
+    assert build_deps(settings, store).sink is None
+
+
 # ---- create_app()을 인자 없이 부르기 (uvicorn --factory가 이렇게 부른다) ----
 
 REQUIRED_ENV = {
@@ -140,6 +150,9 @@ def test_create_app_without_arguments_reads_the_environment(clean_env, no_networ
     app = create_app()
     assert app.state.settings.session_secret == "env-session-secret"
     assert app.state.store.get_user("admin") is not None
+    # 그래프를 따로 주지 않는 운영 경로이므로 진짜 Langfuse 연결이 만들어진다(만들 때 네트워크를 쓰지 않는다 — no_network가 지킨다).
+    assert isinstance(app.state.tracing, LangfuseTracing)
+    app.state.tracing.shutdown()
 
 
 # 필수 값이 하나라도 없으면 첫 요청이 아니라 시작할 때 멈춘다.

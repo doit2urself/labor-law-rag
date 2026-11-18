@@ -22,9 +22,10 @@ from langgraph.graph.state import CompiledStateGraph
 from app.adapters.sqlite_store import AppStore
 from app.api.auth import SessionCodec, looks_like_bcrypt
 from app.api.limits import LoginThrottle, validate_trusted_proxies
-from app.api.routes import log_feedback, router
+from app.api.routes import make_feedback_handler, router
 from app.config import Settings
 from app.container import build_graph_factory
+from app.observability.langfuse_setup import NullTracing, Tracing, build_langfuse
 from app.texts import INVALID_REQUEST_MESSAGE
 
 
@@ -55,11 +56,14 @@ async def _validation_error_handler(request: Request, exc: RequestValidationErro
 def create_app(
     settings: Settings | None = None,
     graph_factory: Callable[[], CompiledStateGraph] | None = None,
+    tracing: Tracing | None = None,
 ) -> FastAPI:
     """앱을 만든다.
 
     settings: 없으면 환경 변수/`.env`에서 읽는다(`uvicorn --factory`는 인자 없이 부르므로). 필수 값이 빠지면 여기서 실패한다.
     graph_factory: 그래프를 만드는 함수. 없으면 진짜 부품을 끼운 그래프(container.py)를 쓴다. 테스트는 가짜 부품 그래프를 넘긴다.
+    tracing: 관측(Langfuse) 연결. 없으면 **그래프도 따로 주지 않은 운영 경로**에서만 진짜 Langfuse 연결을 만든다. 시험처럼 그래프를
+        직접 넘긴 경우에는 꺼진 연결(NullTracing)을 끼운다 — 가짜 키로 진짜 Langfuse 클라이언트를 만들어 두지 않기 위해서다.
     """
     if settings is None:
         settings = Settings()
@@ -70,7 +74,9 @@ def create_app(
     store.upsert_user("admin", settings.admin_password_hash, "admin")
     store.upsert_user("test", settings.test_password_hash, "test")
 
-    factory = graph_factory if graph_factory is not None else build_graph_factory(settings, store)
+    if tracing is None:
+        tracing = build_langfuse(settings) if graph_factory is None else NullTracing()
+    factory = graph_factory if graph_factory is not None else build_graph_factory(settings, store, tracing)
 
     app = FastAPI(title="근로·노동 상담 RAG")
     app.state.settings = settings
@@ -78,7 +84,8 @@ def create_app(
     app.state.graph = factory()
     app.state.sessions = SessionCodec(settings.session_secret)
     app.state.login_throttle = LoginThrottle()
-    app.state.feedback_handler = log_feedback  # Task 16이 Langfuse 점수 기록으로 바꿔 끼운다
+    app.state.tracing = tracing
+    app.state.feedback_handler = make_feedback_handler(tracing)
     app.add_exception_handler(RequestValidationError, _validation_error_handler)
     app.include_router(router)
     return app

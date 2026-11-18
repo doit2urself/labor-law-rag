@@ -36,6 +36,7 @@ from app.api.auth import SESSION_COOKIE, SESSION_MAX_AGE_S, current_user, dummy_
 from app.api.limits import client_ip, normalize_ip
 from app.domain.errors import QuotaExceeded
 from app.graph.runner import AnswerDelta, Final, Progress, StageDetail, run_chat
+from app.observability.langfuse_setup import Tracing
 from app.texts import (
     INTERNAL_ERROR_MESSAGE,
     LOGIN_FAILED_MESSAGE,
@@ -137,17 +138,23 @@ def _frame(event: object, message_id: str, thread_id: str) -> str | None:
 
 
 def _event_stream(
-    graph: object, thread_id: str, question: str, message_id: str, refund: Callable[[], None]
+    graph: object,
+    thread_id: str,
+    question: str,
+    message_id: str,
+    refund: Callable[[], None],
+    config_extra: dict | None = None,
 ) -> Iterator[str]:
     """그래프를 돌리며 SSE 이벤트를 하나씩 내보낸다. 실패하면 사용자용 문구만 담은 error 이벤트로 끝낸다.
 
     답이 나가지 못한 모든 경우(한도 초과, 외부 서비스·내부 오류)는 `refund()`로 사용 횟수를 돌려준다(스펙 6.6: 서버 오류는 차감하지
     않는다). 예외의 내용(외부 서비스 응답, 스택 트레이스)은 사용자에게 보내지 않고 서버 로그에만 남긴다.
     질문 원문은 로그에 쓰지 않는다(개인정보가 섞일 수 있다).
+    config_extra: 관측(Langfuse) 콜백 등 그래프 호출에 더할 설정(`Tracing.run_config`가 만든 것).
     `except Exception`은 클라이언트가 연결을 끊을 때 생기는 GeneratorExit·취소(BaseException)를 잡지 않는다 — 그때는 환불 없이 끝난다.
     """
     try:
-        for event in run_chat(graph, thread_id, question):
+        for event in run_chat(graph, thread_id, question, config_extra):
             frame = _frame(event, message_id, thread_id)
             if frame is not None:
                 yield frame
@@ -188,7 +195,11 @@ def chat(body: ChatBody, request: Request, user: User = Depends(current_user)) -
             state.store.refund_ip_quota(ip_key)
 
     thread_id = str(body.thread_id) if body.thread_id else str(uuid.uuid4())
-    stream = _event_stream(state.graph, thread_id, question, str(uuid.uuid4()), refund)
+    # 답변 하나를 가리키는 번호(message_id)는 화면이 받는 answer 이벤트와 Langfuse trace가 같은 것을 쓴다 — 그래야 👍/👎가
+    # 그 답변의 trace를 찾아간다. 질문 검증과 사용 횟수 확인을 통과한 뒤에만 만든다(거절된 요청은 기록할 실행이 없다).
+    message_id = str(uuid.uuid4())
+    trace_config = state.tracing.run_config(message_id=message_id, thread_id=thread_id, username=user.username)
+    stream = _event_stream(state.graph, thread_id, question, message_id, refund, trace_config)
     # Cache-Control: 중간 캐시가 응답을 모아 두지 않게. X-Accel-Buffering: Nginx가 이벤트를 모아서 한꺼번에 보내지 않게.
     return StreamingResponse(
         stream,
@@ -201,8 +212,21 @@ def chat(body: ChatBody, request: Request, user: User = Depends(current_user)) -
 
 
 def log_feedback(username: str, message_id: str, value: int) -> None:
-    """기본 피드백 처리기: 로그에만 남긴다. Task 16이 Langfuse 점수 기록으로 바꿔 끼운다(`app.state.feedback_handler`)."""
+    """피드백을 로그에 남긴다(질문·답변 내용은 없고, 계정 이름과 답변 번호와 값만)."""
     logger.info("피드백 (user=%s, message_id=%s, value=%s)", username, message_id, value)
+
+
+def make_feedback_handler(tracing: Tracing) -> Callable[[str, str, int], None]:
+    """기본 피드백 처리기: 로그에 남기고 관측 연결에 점수로 넘긴다(`app.state.feedback_handler`에 끼운다).
+
+    서버가 발급하지 않은 message_id는 관측 연결이 무시한다(점수를 마구 만들어 Langfuse 무료 한도를 태우는 일을 막는다).
+    """
+
+    def handler(username: str, message_id: str, value: int) -> None:
+        log_feedback(username, message_id, value)
+        tracing.submit_feedback(message_id, value)
+
+    return handler
 
 
 @router.post("/feedback")

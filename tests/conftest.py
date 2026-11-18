@@ -311,6 +311,25 @@ class FakeIndex:
         return self._docs[chunk_id][0]
 
 
+class RecordingSink:
+    """그래프가 남기는 수동 기록 이벤트(EventSink)를 받아 적어 두는 가짜. 시험이 `events`를 들여다본다.
+
+    `events`는 `{"name": 이름, "payload": 내용}` 목록이다. 내용은 그래프가 마스킹을 거친 뒤 넘긴 값이다.
+    """
+
+    def __init__(self) -> None:
+        self.events: list[dict] = []
+
+    def __call__(self, name: str, payload: dict) -> None:
+        self.events.append({"name": name, "payload": payload})
+
+    def names(self) -> list[str]:
+        return [event["name"] for event in self.events]
+
+    def payloads(self, name: str) -> list[dict]:
+        return [event["payload"] for event in self.events if event["name"] == name]
+
+
 def deps_with(llm: Any, **overrides: Any) -> Any:
     """그래프 노드 테스트용 `GraphDeps`를 만든다. 넘기지 않은 의존성은 가짜 구현으로 채운다.
 

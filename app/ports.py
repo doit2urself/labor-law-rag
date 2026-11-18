@@ -103,3 +103,16 @@ class RerankStage(Protocol):
     def rerank(self, query: str, hits: list[Hit], top_n: int = 5) -> RerankResult:
         """리랭크를 시도하고, 쓰지 못했으면 그 이유(reason)와 함께 기존 상위 결과를 돌려준다."""
         ...
+
+
+@runtime_checkable
+class EventSink(Protocol):
+    """그래프가 남기는 수동 기록 이벤트(질문 분류, 리랭크 폴백 여부, 검증 결과, 갈림길 결과 등)를 받는 곳.
+
+    운영에서는 Langfuse에 이벤트로 남기고, 테스트에서는 목록에 적어 둔다. 그래프는 이것이 무엇인지 모른다.
+    넘겨받는 `payload`는 그래프가 이미 마스킹을 거친 값이다(개인정보는 기록에 남지 않는다).
+    """
+
+    def __call__(self, name: str, payload: dict) -> None:
+        """이벤트 하나를 기록한다. 실패해도 그래프는 멈추지 않는다(호출한 쪽이 예외를 삼킨다)."""
+        ...

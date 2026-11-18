@@ -25,6 +25,7 @@ from app.config import Settings
 from app.graph.build import build_graph
 from app.graph.deps import GraphDeps
 from app.graph.state import checkpoint_serde
+from app.observability.langfuse_setup import Tracing
 from app.retrieval.rerank_gate import RerankGate
 from app.scope import COVERED_LAWS
 
@@ -45,10 +46,11 @@ def make_checkpointer(path: str) -> SqliteSaver:
     return SqliteSaver(connection, serde=checkpoint_serde())
 
 
-def build_deps(settings: Settings, store: AppStore) -> GraphDeps:
+def build_deps(settings: Settings, store: AppStore, tracing: Tracing | None = None) -> GraphDeps:
     """설정으로 진짜 부품 묶음(GraphDeps)을 만든다.
 
     store: 월 리랭크 호출 수를 세는 SQLite 저장소(앱이 쓰는 것과 같은 것을 받는다).
+    tracing: 관측(Langfuse) 연결. 주면 그 `record_event`가 그래프의 수동 기록 sink가 된다(없으면 기록하지 않는다).
     검색 깊이(`search_depth`)는 포트(SearchPort.search)에 자리가 없어서 OpenSearchStore 생성자로 넘긴다.
     """
     client = make_client(settings.opensearch_url, settings.opensearch_user, settings.opensearch_password)
@@ -59,17 +61,21 @@ def build_deps(settings: Settings, store: AppStore) -> GraphDeps:
         rerank=RerankGate(CohereReranker(settings.cohere_api_key), store, cap=settings.rerank_monthly_cap),
         settings=settings,
         covered_laws=list(COVERED_LAWS),
+        sink=tracing.record_event if tracing is not None else None,
     )
 
 
-def build_graph_factory(settings: Settings, store: AppStore | None = None) -> Callable[[], CompiledStateGraph]:
+def build_graph_factory(
+    settings: Settings, store: AppStore | None = None, tracing: Tracing | None = None
+) -> Callable[[], CompiledStateGraph]:
     """그래프를 만들어 주는 함수를 돌려준다. 돌려받은 함수를 부르면 진짜 부품이 끼워진 컴파일된 그래프가 나온다.
 
     store를 주면 그것을 쓰고(앱이 이미 만든 저장소와 같은 것), 없으면 `settings.sqlite_path`로 새로 연다.
+    tracing을 주면 그래프의 수동 기록이 그 연결로 나간다.
     """
 
     def factory() -> CompiledStateGraph:
         the_store = store if store is not None else AppStore(settings.sqlite_path)
-        return build_graph(build_deps(settings, the_store), make_checkpointer(settings.checkpoint_path))
+        return build_graph(build_deps(settings, the_store, tracing), make_checkpointer(settings.checkpoint_path))
 
     return factory
