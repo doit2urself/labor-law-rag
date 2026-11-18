@@ -1,0 +1,19 @@
+# 비밀: 서버 .env에만 둔다. 저장소에는 .env.example(값 없음)만 둔다.
+.env
+
+# 파이썬 가상환경과 캐시
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 수집·색인·평가 산출물. 홀드아웃 ID 목록만 커밋한다.
+# (폴더째 제외하면 아래 예외가 먹지 않으므로 `data/*`로 안의 파일만 제외한다.)
+data/*
+!data/holdout_ids.json
+
+# 프런트엔드 의존성
+frontend/node_modules/
+
+# 실행 원장(executing-plans 작업공간)
+.superpowers/
