@@ -32,7 +32,14 @@
 
 - 스왑이 0B이므로 OpenSearch가 요구하는 "스왑 끄기"는 이미 충족된 상태다(Task 6).
 - Docker가 없으므로 결정(Docker 미사용)과 맞는다.
-- **보안 관찰:** 비밀번호 로그인(`passwordauthentication yes`)과 root 로그인(`permitrootlogin yes`)이 모두 켜져 있고 22번 포트가 인터넷에 열려 있다. 키 로그인은 이미 동작하므로 비밀번호 로그인을 끌 수 있다. 서버를 바꾸는 작업이라 사용자 승인 뒤에 별도로 진행한다(이 보고서 작성 시점에는 하지 않았다).
+- **보안 관찰과 조치(해결됨):** 처음에는 비밀번호 로그인(`passwordauthentication yes`)과 root 로그인(`permitrootlogin yes`)이 모두 켜져 있고 22번 포트가 인터넷에 열려 있었다. 원인과 조치는 아래와 같다(명령마다 사용자 승인, 2026-11-18).
+  - 원인: sshd는 `sshd_config.d/*.conf`를 번호 순으로 읽고 **먼저 나온 값이 이긴다**. `50-cloud-init.conf`가 `PasswordAuthentication yes`, 뒤의 `60-cloudimg-settings.conf`가 `no`라서 50번이 이겼다. `PermitRootLogin yes`는 본 설정 `sshd_config` 42번 줄에 있었다.
+  - 조치: cloud-init이 관리하는 파일은 건드리지 않고 `/etc/ssh/sshd_config.d/00-hardening.conf`를 추가했다(내용: `PasswordAuthentication no`, `PermitRootLogin prohibit-password`). 이름이 00이라 먼저 읽힌다.
+  - 적용 전 확인: `sshd -t` 문법 정상(exit 0), `sshd -T`가 `passwordauthentication no`·`permitrootlogin without-password`·`kbdinteractiveauthentication no`·`pubkeyauthentication yes`를 보여 줌. root에 등록된 키는 하나이고 지문이 이 PC 에이전트의 키와 같음.
+  - 적용: `systemctl reload ssh` (열린 접속은 끊기지 않음).
+  - 적용 후 확인: 키로 새 연결 성공(`echo key-login-ok`), `ssh.service`·`ssh.socket` 모두 active. 클라이언트 쪽 `ssh -v`의 `Authentications that can continue`가 적용 전 `publickey,password` → 적용 후 `publickey`로 바뀜.
+  - **되돌리는 방법:** 서버에서 `rm /etc/ssh/sshd_config.d/00-hardening.conf && systemctl reload ssh`. 접속이 아예 안 되면 Contabo 고객 패널의 VNC 콘솔로 같은 명령을 실행한다(콘솔 접근은 확인하지 못함).
+  - 이 PC 쪽 설정: 별칭 `contabo`(`~/.ssh/config`), 키는 `ssh-agent`가 보관(서비스 자동 시작). `~/.ssh` 폴더 권한은 `GeneralUser`를 뺀 세 곳으로 좁힘.
 
 ## 2. 무료 호출 한도 측정 (Gemini · Cohere)
 
