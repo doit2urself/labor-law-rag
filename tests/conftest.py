@@ -43,10 +43,14 @@ def settings_factory(**overrides: Any) -> Settings:
 
 
 class FakeEmbedder:
-    """텍스트마다 항상 같은 가짜 벡터를 돌려주는 임베더 (EmbedderPort)."""
+    """텍스트마다 항상 같은 가짜 벡터를 돌려주는 임베더 (EmbedderPort).
+
+    `queries`: embed_query로 받은 글의 기록. 검색 노드가 "어떤 검색어를 벡터로 바꿨는지" 확인하는 데 쓴다.
+    """
 
     def __init__(self, dim: int = 768) -> None:
         self.dim = dim
+        self.queries: list[str] = []
 
     def _vector(self, text: str) -> list[float]:
         # 같은 글이면 같은 벡터가 나와야 "멱등" 같은 성질을 시험할 수 있다.
@@ -57,6 +61,7 @@ class FakeEmbedder:
         return [self._vector(t) for t in texts]
 
     def embed_query(self, text: str) -> list[float]:
+        self.queries.append(text)
         return self._vector(text)
 
 
