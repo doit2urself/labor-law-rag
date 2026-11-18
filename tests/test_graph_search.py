@@ -253,3 +253,31 @@ def test_refine_prompt_lists_tried_queries_and_failure_reason():
 def test_route_after_refine():
     assert route_after_refine({"rewritten_query": "새 검색어", "tried_queries": ["이전"]}) == "retrieve"
     assert route_after_refine({"rewritten_query": "이전  ", "tried_queries": ["이전"]}) == "refuse"
+
+
+# --- 호출 예산: 답변 한 번 = 생성 + 검증 = LLM 2회 (Task 13에서 보강) ----------------------------------
+
+
+# 생성 뒤에는 검증(LLM 1회)이 반드시 따라온다. 그래서 생성은 "둘 다 낼 여유"가 있을 때만 시작한다.
+# 안 그러면 llm_calls=7에서 생성(8) → 검증(9)이 되어 상한(8회)을 넘는다.
+@pytest.mark.parametrize("llm_calls,expected", [(5, "generate"), (6, "generate"), (7, "refuse"), (8, "refuse")])
+def test_generate_needs_room_for_generation_and_verification(llm_calls, expected):
+    state = {"sufficient": True, "research_count": 0, "llm_calls": llm_calls}
+    assert route_after_sufficiency(state, settings_factory()) == expected
+
+
+# 재검색은 검색어 만들기(1회) + 이어질 답변(2회)이 들어갈 때만 한다. 못 들어가면 헛된 검색·리랭크를 하지 말고 거절한다.
+@pytest.mark.parametrize("llm_calls,expected", [(4, "refine"), (5, "refine"), (6, "refuse"), (7, "refuse")])
+def test_refine_needs_room_for_a_new_query_and_an_answer(llm_calls, expected):
+    state = {"sufficient": False, "research_count": 0, "llm_calls": llm_calls}
+    assert route_after_sufficiency(state, settings_factory()) == expected
+
+
+# 검색어를 한 번 더 만들게 하는 두 번째 시도도, 뒤따를 답변(2회)의 몫을 남겨 두어야 한다.
+def test_refine_second_attempt_must_leave_room_for_an_answer():
+    llm = FakeLlm([Refined(query="주휴수당"), Refined(query="새 검색어")])
+    out = refine_node(deps_with(llm))({"tried_queries": ["주휴수당"], "llm_calls": 5, "research_count": 0})
+    assert llm.call_count == 1 and out["llm_calls"] == 6  # 6 + 1 + 2 = 9 > 8 이라 두 번째 시도를 하지 않는다
+    llm2 = FakeLlm([Refined(query="주휴수당"), Refined(query="새 검색어")])
+    out2 = refine_node(deps_with(llm2))({"tried_queries": ["주휴수당"], "llm_calls": 4, "research_count": 0})
+    assert llm2.call_count == 2 and out2["rewritten_query"] == "새 검색어"  # 5 + 1 + 2 = 8 이라 허용

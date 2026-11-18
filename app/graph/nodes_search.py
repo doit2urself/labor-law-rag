@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from app.config import Settings
 from app.domain.models import Hit
+from app.graph.budget import ANSWER_CALLS, has_room
 from app.graph.deps import GraphDeps
 from app.graph.state import GraphState
 
@@ -175,8 +176,8 @@ def refine_node(deps: GraphDeps) -> Callable[[GraphState], dict]:
         seen = {_norm(q) for q in state.get("tried_queries", [])}
         llm_calls = state.get("llm_calls", 0)
         for attempt in (1, 2):
-            if attempt == 2 and llm_calls >= deps.settings.max_llm_calls:
-                break  # 호출 예산을 다 썼다. 두 번째 시도로 상한을 넘기지 않는다.
+            if attempt == 2 and not has_room(llm_calls, deps.settings, 1 + ANSWER_CALLS):
+                break  # 두 번째 시도(1회) 뒤에 답변(생성+검증 2회)이 들어갈 여유가 없다. 상한을 넘기지 않는다.
             user = _build_refine_prompt(state, repeated_last_time=attempt == 2)
             refined = Refined.model_validate(deps.llm.complete_json(REFINE_SYSTEM_PROMPT, user, Refined))
             llm_calls += 1
@@ -210,15 +211,16 @@ def route_after_analyze(state: GraphState) -> Literal["retrieve", "refuse"]:
 def route_after_sufficiency(state: GraphState, settings: Settings) -> Literal["generate", "refine", "refuse"]:
     """충분성 판단 뒤 갈림길: 답변 생성 / 검색어 다시 만들기 / 거절.
 
-    LLM 호출 예산을 다 썼으면(`llm_calls >= max_llm_calls`) 근거가 충분해도, 재검색 기회가 남아 있어도 거절한다 —
-    생성도 재검색도 LLM 호출이 필요하기 때문이다(상한을 넘기면 "근거 부족" 안내로 끝낸다, 스펙 6.4).
-    예산이 남았을 때: 충분하면 생성, 아니면 재검색 한도(`max_research`) 안에서 재검색, 한도를 채웠으면 거절.
+    예산(LLM 호출 상한)은 "이어질 단계까지" 들어갈 때만 다음 단계를 시작한다(app/graph/budget.py 설명 참고):
+    - 생성은 생성 + 검증(2회)이 들어갈 때만. 안 그러면 생성 뒤 검증에서 상한을 넘는다.
+    - 재검색은 검색어 만들기(1회) + 생성 + 검증(2회)이 들어갈 때만. 못 들어가면 임베딩·검색·리랭크(Cohere 월 한도)를
+      헛되이 쓰지 말고 거절한다(상한을 넘기면 "근거 부족" 안내로 끝낸다, 스펙 6.4).
+    예산이 허락하면: 충분하면 생성, 아니면 재검색 한도(`max_research`) 안에서 재검색, 한도를 채웠으면 거절.
     """
-    if state.get("llm_calls", 0) >= settings.max_llm_calls:
-        return "refuse"
+    llm_calls = state.get("llm_calls", 0)
     if state.get("sufficient", False):
-        return "generate"
-    if state.get("research_count", 0) < settings.max_research:
+        return "generate" if has_room(llm_calls, settings, ANSWER_CALLS) else "refuse"
+    if state.get("research_count", 0) < settings.max_research and has_room(llm_calls, settings, 1 + ANSWER_CALLS):
         return "refine"
     return "refuse"
 

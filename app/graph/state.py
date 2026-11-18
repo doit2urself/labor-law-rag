@@ -16,10 +16,16 @@
 import operator
 from typing import Annotated, TypedDict
 
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph.message import add_messages
 from langgraph.types import Overwrite
 
-from app.domain.models import GeneratedAnswer, Hit, Verification, Violation
+from app.domain.models import Chunk, GeneratedAnswer, Hit, SentenceOut, Verification, Violation
+
+# 그래프 상태(GraphState)에 들어가 체크포인트로 저장되는 우리 도메인 타입 전부.
+# 체크포인트 직렬화기의 허용 목록으로 쓴다(아래 checkpoint_serde). 상태에 새 도메인 타입을 쓰는 필드를 더하면 여기에도
+# 더해야 한다 — 빠뜨리면 그 타입은 차단되어 조용히 dict로 복원된다. tests/test_checkpoint_serde.py가 빠짐을 자동으로 잡는다.
+STATE_TYPES: tuple[type, ...] = (Chunk, Hit, Violation, GeneratedAnswer, SentenceOut, Verification)
 
 
 class GraphState(TypedDict, total=False):
@@ -79,3 +85,13 @@ def reset_turn_update(question: str) -> dict:
         "research_count": 0,
         "llm_calls": 0,
     }
+
+
+def checkpoint_serde() -> JsonPlusSerializer:
+    """체크포인트(대화 상태 저장소)가 상태를 저장·복원할 때 쓰는 직렬화기. 우리 도메인 타입만 허용 목록에 올린다.
+
+    왜 필요한가: LangGraph 기본값은 "등록 안 된 타입도 읽되 경고"이고 앞으로는 차단될 예정이다. 목록을 명시하면
+    (1) 경고가 사라지고 (2) 체크포인트 파일이 변조되어도 목록에 없는 임의의 클래스는 복원되지 않는다.
+    운영 코드는 `SqliteSaver(conn, serde=checkpoint_serde())`, 테스트는 `InMemorySaver(serde=checkpoint_serde())`로 쓴다.
+    """
+    return JsonPlusSerializer(allowed_msgpack_modules=[(t.__module__, t.__name__) for t in STATE_TYPES])

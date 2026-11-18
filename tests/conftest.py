@@ -90,6 +90,15 @@ class FakeLlm:
     def call_count(self) -> int:
         return len(self.prompts)
 
+    @classmethod
+    def script(cls, **scenario: Any) -> "ScriptedLlm":
+        """그래프 전체를 돌리는 시험용: 스키마(Analysis·Sufficiency·GeneratedAnswer…)를 보고 알맞은 응답을 스스로 고르는 가짜.
+
+        시나리오 인자는 `ScriptedLlm`의 설명을 본다. 응답을 순서대로 미리 넣는 일반 `FakeLlm([...])`과 달리,
+        그래프가 재생성·재검색으로 몇 번 돌든 응답이 모자라지 않는다.
+        """
+        return ScriptedLlm(**scenario)
+
     def complete_json(
         self,
         system: str,
@@ -101,7 +110,101 @@ class FakeLlm:
         self.prompts.append(RecordedPrompt(system, user, schema, tags))
         if not self._responses:
             raise AssertionError("FakeLlm: 준비된 응답이 모두 소진되었습니다")
-        return self._responses.pop(0)
+        response = self._responses.pop(0)
+        if isinstance(response, Exception):  # 응답 자리에 예외 객체를 넣으면 그 순서의 호출이 실패한다(한도 초과 등 시험용)
+            raise response
+        return response
+
+
+class ScriptedLlm(FakeLlm):
+    """스키마 종류에 따라 응답을 만들어 주는 시나리오형 가짜 LLM. 호출 기록(prompts, call_count)은 FakeLlm과 같다.
+
+    시나리오 인자:
+    - qclass: 질문 분석이 내릴 분류(기본 "counsel").
+    - first_answer_with_text / first_answer_citations: 첫 번째 답변의 글과 인용 ID(기본 글은 평범한 문장, 인용 ["doc1"]).
+      이후 답변은 항상 평범한 문장 + ["doc1"]이다.
+    - verification_fails_once: 첫 번째 검증만 "근거 불일치"로 답한다. always_unsupported: 검증이 항상 불일치.
+    - verdict_found_once: 첫 번째 검증이 "사건 판단 문장 있음"으로 답한다.
+    답변은 언제나 문장 1개라서 검증 응답의 sentences_ok도 1개다.
+    """
+
+    def __init__(
+        self,
+        *,
+        qclass: str = "counsel",
+        first_answer_with_text: str | None = None,
+        first_answer_citations: list[str] | None = None,
+        verification_fails_once: bool = False,
+        always_unsupported: bool = False,
+        verdict_found_once: bool = False,
+    ) -> None:
+        super().__init__([])
+        self._qclass = qclass
+        self._first_text = first_answer_with_text
+        self._first_citations = first_answer_citations
+        self._fails_once = verification_fails_once
+        self._always_unsupported = always_unsupported
+        self._verdict_once = verdict_found_once
+        self._seen: dict[str, int] = {}
+
+    def complete_json(
+        self,
+        system: str,
+        user: str,
+        schema: type[BaseModel],
+        *,
+        tags: list[str] | None = None,
+    ) -> BaseModel:
+        # 순환 import를 피하려고 여기서 불러온다(app.graph는 tests/conftest보다 나중에 만들어진 모듈이다).
+        from app.domain.models import GeneratedAnswer, SentenceOut, Verification
+        from app.graph.nodes_analyze import Analysis
+        from app.graph.nodes_search import Refined, Sufficiency
+
+        self.prompts.append(RecordedPrompt(system, user, schema, tags))
+        n = self._seen.get(schema.__name__, 0)  # 이 스키마로 지금까지 몇 번째 호출인지(0부터)
+        self._seen[schema.__name__] = n + 1
+
+        if schema is Analysis:
+            return Analysis(rewritten_query="주휴수당 지급 요건", qclass=self._qclass)  # type: ignore[arg-type]
+        if schema is Sufficiency:
+            return Sufficiency(sufficient=True)
+        if schema is Refined:
+            return Refined(query=f"새 검색어 {n + 1}")
+        if schema is GeneratedAnswer:
+            first = n == 0
+            text = self._first_text if first and self._first_text else "주휴수당은 유급휴일에 대한 임금입니다."
+            citations = self._first_citations if first and self._first_citations is not None else ["doc1"]
+            return GeneratedAnswer(sentences=[SentenceOut(text=text, citation_ids=citations, kind="evidence")])
+        if schema is Verification:
+            unsupported = self._always_unsupported or (self._fails_once and n == 0)
+            return Verification(
+                sentences_ok=[not unsupported],
+                verdict_found=self._verdict_once and n == 0,
+                notes="근거 불일치" if unsupported else "",
+            )
+        raise AssertionError(f"ScriptedLlm: 처리할 수 없는 스키마 {schema.__name__}")
+
+
+def sample_hits(n: int = 5) -> list[Hit]:
+    """그래프 시험용 기본 검색 결과: 근로기준법 제51~(50+n)조, 점수는 0.9에서 0.1씩 내려간다."""
+    hits = []
+    for i in range(1, n + 1):
+        chunk = Chunk(
+            chunk_id=f"law:근로기준법:1:20260101:{50 + i}:0",
+            doc_type="law",
+            title=f"근로기준법 제{50 + i}조(휴일)",
+            text=f"제{50 + i}조(휴일) 사용자는 근로자에게 1주에 평균 1회 이상의 유급휴일을 보장하여야 한다.",
+            law_name="근로기준법",
+            article_no=str(50 + i),
+            paragraph=None,
+            effective_date="20260101",
+            promulgation_date=None,
+            source_id="law:근로기준법:1:20260101",
+            source_url=f"https://www.law.go.kr/법령/근로기준법/제{50 + i}조",
+            extra={},
+        )
+        hits.append(Hit(chunk, round(0.9 - 0.1 * (i - 1), 2), i))
+    return hits
 
 
 class FakeReranker:
@@ -211,7 +314,7 @@ def deps_with(llm: Any, **overrides: Any) -> Any:
     values: dict[str, Any] = {
         "llm": llm,
         "embedder": FakeEmbedder(),
-        "search": FakeSearch([]),
+        "search": FakeSearch(sample_hits()),
         "rerank": FakeRerankStage(),
         "settings": settings_factory(),
         "covered_laws": list(COVERED_LAWS),
