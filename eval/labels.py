@@ -22,6 +22,8 @@ from __future__ import annotations
 import argparse
 import csv
 import dataclasses
+import io
+import random
 import sys
 from collections import Counter
 from collections.abc import Sequence
@@ -29,6 +31,7 @@ from pathlib import Path
 
 from app.ingest.parse_law import article_label
 from eval.evalset import EvalItem, article_sort_key, load_evalset, save_evalset
+from eval.metrics import ItemResult
 
 COLUMNS = ["id", "원문질문", "일상어질문", "정답조문", "검수자", "승인"]
 REQUIRED_ON_IMPORT = ["id", "일상어질문", "검수자", "승인"]  # 가져올 때 꼭 있어야 하는 열(나머지는 읽기 전용 참고용)
@@ -54,8 +57,8 @@ def export_casual_sheet(items: list[EvalItem], path: str | Path) -> None:
             writer.writerow([item.id, item.question, item.casual_question or "", _gold_text(item), "", ""])
 
 
-def _read_rows(path: str | Path) -> list[dict[str, str]]:
-    """CSV를 읽어 줄마다 {열 이름: 값}으로 돌려준다.
+def _read_rows(path: str | Path, required: Sequence[str] = tuple(REQUIRED_ON_IMPORT)) -> list[dict[str, str]]:
+    """CSV를 읽어 줄마다 {열 이름: 값}으로 돌려준다. required: 꼭 있어야 하는 열(시트 종류마다 다르다).
 
     한국어 Windows의 Excel은 "CSV"로 저장하면 **cp949(BOM 없음)** 로 쓴다. UTF-8로 먼저 읽어 보고 안 되면 cp949로 읽는다.
     """
@@ -64,8 +67,10 @@ def _read_rows(path: str | Path) -> list[dict[str, str]]:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         text = raw.decode("cp949")
-    reader = csv.DictReader(text.splitlines())
-    missing = [c for c in REQUIRED_ON_IMPORT if c not in (reader.fieldnames or [])]
+    # StringIO(newline="")로 읽는 이유: 칸 안의 줄바꿈(검증기 시트의 인용 문서 본문)이 그대로 보존된다.
+    # text.splitlines()로 먼저 자르면 줄바꿈이 사라져 칸 안의 글이 이어 붙는다("첫째\n\n둘째" → "첫째둘째", 이 PC에서 확인).
+    reader = csv.DictReader(io.StringIO(text, newline=""))
+    missing = [c for c in required if c not in (reader.fieldnames or [])]
     if missing:
         raise ValueError(f"시트에 필수 열이 없습니다: {', '.join(missing)}")
     return [{k: (v or "").strip() for k, v in row.items() if k is not None} for row in reader]
@@ -110,6 +115,95 @@ def import_casual_sheet(path: str | Path, items: list[EvalItem]) -> list[EvalIte
             updates[item_id] = dataclasses.replace(by_id[item_id], casual_question=None, reviewer=reviewer)
 
     return [updates.get(item.id, item) for item in items]
+
+
+# --- 검증기 라벨 시트 (Task 17) ---------------------------------------------------
+#
+# 서비스의 LLM 검증기는 "이 문장이 인용한 문서로 뒷받침되는가"를 문장마다 판정한다. 그 판정이 믿을 만한지는 사람이 같은
+# 문장을 읽고 매긴 판정과 비교해야 알 수 있다(스펙 6.8, LLM 판정기도 틀린다). 이 시트가 그 비교용 표본을 사람에게 건넨다.
+# 사람이 아닌 검수자는 일상어 시트와 같은 이유로 거부한다(질문·답변을 만든 모델이 자기 검증기를 채점하면 정확도가 부풀려진다).
+
+VALIDATOR_COLUMNS = ["id", "질문", "답변문장", "인용문서", "일치(O/X)", "검수자"]
+REQUIRED_ON_VALIDATOR_IMPORT = ["id", "일치(O/X)", "검수자"]
+
+
+def _validator_rows(results: Sequence[ItemResult]) -> list[tuple[dict[str, str], bool]]:
+    """시트에 올릴 수 있는 문장들을 (시트 줄, 검증기 판정) 목록으로 만든다. 줄 id는 `<평가 항목 id>#<문장 번호(1부터)>`.
+
+    시트에 올리는 문장: 나간 답변의 문장 중 **인용이 있고** 검증기 판정이 기록된 것. 인용이 없는 문장은 "인용 문서로 뒷받침되는가"를
+    물을 수 없고, 판정이 없는 문장은 검증기를 채점할 기준이 없다. 거절한 질문에는 문장이 없다.
+    """
+    rows: list[tuple[dict[str, str], bool]] = []
+    for result in results:
+        if result.refused:
+            continue
+        for number, sentence in enumerate(result.sentences, start=1):
+            if not sentence.citation_ids or sentence.verifier_ok is None:
+                continue
+            documents = "\n\n".join(result.sources[i] for i in sentence.citation_ids if i in result.sources)
+            row = {"id": f"{result.item_id}#{number}", "질문": result.question, "답변문장": sentence.text, "인용문서": documents}
+            rows.append((row, sentence.verifier_ok))
+    return rows
+
+
+def export_validator_sheet(results: Sequence[ItemResult], path: str | Path, n: int = 50, seed: int = 42) -> None:
+    """검증기 라벨 시트를 CSV로 쓴다: 문장이 n개보다 많으면 시드로 n개를 뽑는다(같은 시드면 항상 같은 문장, 줄 순서는 결과 순서).
+
+    검증기의 판정은 시트에 넣지 않는다 — 사람이 그 판정을 보고 따라 표시하면(기준점 효과) 정확도가 부풀려진다.
+    이미 파일이 있으면 FileExistsError: 사람이 채운 시트를 덮어쓰면 안 된다. 일치(O/X)·검수자 칸은 비워 둔다.
+    """
+    path = Path(path)
+    if path.exists():
+        raise FileExistsError(f"{path} 이(가) 이미 있습니다. 사람이 고친 시트일 수 있어서 덮어쓰지 않습니다")
+    rows = [row for row, _ in _validator_rows(results)]
+    if len(rows) > n:
+        keep = set(random.Random(seed).sample(range(len(rows)), n))
+        rows = [row for index, row in enumerate(rows) if index in keep]
+    with open(path, "w", encoding="utf-8-sig", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=VALIDATOR_COLUMNS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({**row, "일치(O/X)": "", "검수자": ""})
+
+
+def read_validator_sheet(path: str | Path) -> dict[str, bool]:
+    """사람이 채운 시트를 {줄 id: 사람 판정(True=일치)}로 읽는다. 아직 안 채운 줄은 건너뛴다(일부만 채워도 가져올 수 있다).
+
+    앞뒤가 안 맞는 줄(검수자만 있음, 일치 칸만 있음, O/X가 아님, 사람이 아닌 검수자, 중복 id)은 ValueError다.
+    """
+    rows = _read_rows(path, REQUIRED_ON_VALIDATOR_IMPORT)
+    duplicates = [i for i, count in Counter(r["id"] for r in rows).items() if count > 1]
+    if duplicates:
+        raise ValueError(f"시트에 id가 중복되었습니다: {', '.join(duplicates)}")
+    labels: dict[str, bool] = {}
+    for row in rows:
+        row_id, mark, reviewer = row["id"], row["일치(O/X)"].upper(), row["검수자"]
+        if not mark and not reviewer:
+            continue
+        if reviewer.lower() in NON_HUMAN_REVIEWERS:
+            raise ValueError(f"{row_id}: 검수자 {reviewer!r}는 사람이 아닙니다. 사람이 직접 확인한 줄만 가져옵니다")
+        if not reviewer:
+            raise ValueError(f"{row_id}: 일치 표시는 있는데 검수자 칸이 비어 있습니다(본인 이름을 적어 주세요)")
+        if not mark:
+            raise ValueError(f"{row_id}: 검수자는 있는데 일치(O/X) 칸이 비어 있습니다")
+        if mark not in ("O", "X"):
+            raise ValueError(f"{row_id}: 일치(O/X) 칸은 O 또는 X여야 합니다(받은 값: {row['일치(O/X)']!r})")
+        labels[row_id] = mark == "O"
+    return labels
+
+
+def import_validator_sheet(path: str | Path) -> list[bool]:
+    """사람이 채운 줄들의 판정(True=일치)을 시트 순서대로 돌려준다. 어느 문장의 판정인지는 `read_validator_sheet`가 id와 함께 준다."""
+    return list(read_validator_sheet(path).values())
+
+
+def predicted_flags(results: Sequence[ItemResult], keys: Sequence[str]) -> list[bool]:
+    """검증기가 같은 문장에 낸 판정을 `keys`(사람이 채운 줄 id) 순서대로 꺼낸다. `validator_accuracy`의 predicted 입력이 된다.
+
+    모르는 id면 KeyError — 시트가 이 결과 파일과 다른 실행에서 나온 것이라는 뜻이라 조용히 넘기지 않는다.
+    """
+    by_key = {row["id"]: verdict for row, verdict in _validator_rows(results)}
+    return [by_key[key] for key in keys]
 
 
 DEFAULT_EVALSET = Path(__file__).resolve().parent / "evalset.jsonl"
