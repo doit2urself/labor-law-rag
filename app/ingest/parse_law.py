@@ -65,10 +65,10 @@ def article_url(law_name: str, article_no: str) -> str:
     형식 `https://www.law.go.kr/법령/<법령명>/제<n>조`는 한 건에서 동작을 확인했다(스펙 6.5). 법령명에 공백이 있을 때
     `%20`로 바꿔도 되는지는 확인하지 못했다(미확인).
     """
-    return f"https://www.law.go.kr/법령/{law_name.replace(' ', '%20')}/{_article_label(article_no)}"
+    return f"https://www.law.go.kr/법령/{law_name.replace(' ', '%20')}/{article_label(article_no)}"
 
 
-def _article_label(article_no: str) -> str:
+def article_label(article_no: str) -> str:
     """`"55"` → `"제55조"`, `"55의2"` → `"제55조의2"`."""
     main, _, branch = article_no.partition("의")
     return f"제{main}조의{branch}" if branch else f"제{main}조"
@@ -210,7 +210,7 @@ def _block_to_chunks(
     cleaned = [ln for ln in cleaned if ln]
     full_text = "\n".join(cleaned)
 
-    label = _article_label(block.number)
+    label = article_label(block.number)
     title = f"{law_name} {label}({block.heading})" if block.heading else f"{law_name} {label}"
     url = article_url(law_name, block.number)
     extra = {**base_extra, "chapter": block.chapter}
