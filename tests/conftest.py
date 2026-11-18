@@ -30,6 +30,7 @@ def settings_factory(**overrides: Any) -> Settings:
         "law_api_oc": "test-oc",
         "gemini_api_key": "test-gemini-key",
         "cohere_api_key": "test-cohere-key",
+        "opensearch_password": "test-opensearch-password",
         "admin_password_hash": "test-admin-hash",
         "test_password_hash": "test-test-hash",
         "session_secret": "test-session-secret",

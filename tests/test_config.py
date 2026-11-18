@@ -23,6 +23,13 @@ def test_requires_hashes_not_plaintext_passwords():
         Settings(_env_file=None)  # 필수 값 없음
 
 
+# OpenSearch는 보안 기능을 켠 채로 쓴다(사용자 결정 2026-11-18): https 주소, 계정 admin, 비밀번호는 필수(기본값 없음).
+def test_opensearch_defaults_expect_security_on():
+    s = settings_factory()
+    assert (s.opensearch_url, s.opensearch_user) == ("https://127.0.0.1:9200", "admin")
+    assert Settings.model_fields["opensearch_password"].is_required()
+
+
 # 환경 변수는 LABOR_ 접두어로 읽혀야 한다(서버 .env가 쓰는 방식).
 def test_env_variables_use_labor_prefix(monkeypatch):
     monkeypatch.setenv("LABOR_MAX_LLM_CALLS", "3")

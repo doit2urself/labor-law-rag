@@ -41,7 +41,9 @@ class Settings(BaseSettings):
     rerank_min_score: float = 0.0  # 충분성 판단 임계값. 측정 전 임시값이며 Task 9에서 정한다.
 
     # --- 서버·저장소 ---
-    opensearch_url: str = "http://127.0.0.1:9200"  # 외부에 열지 않고 같은 서버 안에서만 접근한다.
+    # 외부에 열지 않고 같은 서버 안에서만 접근한다. 보안 기능을 켠 채로 쓰므로(사용자 결정 2026-11-18) https + 계정이다.
+    opensearch_url: str = "https://127.0.0.1:9200"
+    opensearch_user: str = "admin"
     index_name: str = "labor-rag-v1"
     sqlite_path: str = "data/app.db"
     # 이 주소에서 온 요청의 X-Forwarded-For만 믿는다(위조된 헤더로 IP 제한을 우회하는 것을 막는다).
@@ -51,6 +53,7 @@ class Settings(BaseSettings):
     law_api_oc: str
     gemini_api_key: str
     cohere_api_key: str
+    opensearch_password: str  # 설치할 때 사용자가 서버에서 직접 정한 admin 비밀번호. 서버 .env에만 둔다.
     admin_password_hash: str
     test_password_hash: str
     session_secret: str
