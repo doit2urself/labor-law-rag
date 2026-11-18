@@ -1,0 +1,30 @@
+event: progress
+data: {"stage": "analyze", "label": "질문을 분석하는 중"}
+
+event: progress
+data: {"stage": "search", "label": "법령 조문을 찾는 중"}
+
+event: detail
+data: {"stage": "search", "text": "근로기준법 제51조, 제52조, 제53조 …"}
+
+event: progress
+data: {"stage": "rerank", "label": "관련도가 높은 조문을 고르는 중"}
+
+event: progress
+data: {"stage": "sufficiency", "label": "근거가 충분한지 확인하는 중"}
+
+event: detail
+data: {"stage": "sufficiency", "text": "충분함"}
+
+event: progress
+data: {"stage": "generate", "label": "답변을 작성하는 중"}
+
+event: progress
+data: {"stage": "verify", "label": "답변이 근거와 맞는지 확인하는 중"}
+
+event: delta
+data: {"part": "sentence", "index": 0, "text": "주휴수당은 유급휴일에 대한 임금입니다."}
+
+event: answer
+data: {"refused": false, "preface": null, "sentences": [{"text": "주휴수당은 유급휴일에 대한 임금입니다.", "citation_ids": ["doc1"], "kind": "evidence"}], "sources": [{"id": "doc1", "label": "근로기준법 제51조", "doc_type": "law", "law_name": "근로기준법", "article_no": "51", "branch_no": null, "url": "https://www.law.go.kr/법령/근로기준법/제51조", "text": "제51조(휴일) 사용자는 근로자에게 1주에 평균 1회 이상의 유급휴일을 보장하여야 한다."}], "notice": ["법률 자문이 아닙니다. 출처의 원문을 확인하세요", "출처: 법제처 국가법령정보센터"], "message_id": "<uuid>", "thread_id": "<uuid>"}
+
