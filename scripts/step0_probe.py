@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import time
 from collections.abc import Callable, Mapping
@@ -25,13 +24,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from dotenv import dotenv_values
-
 # `python scripts/step0_probe.py`로 직접 실행하면 sys.path[0]이 scripts/ 폴더라서 `import app`이 안 된다.
 # 프로젝트 루트를 import 경로에 넣어 어디서 실행해도 되게 한다.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.domain.errors import QuotaExceeded  # noqa: E402
+from scripts.envfile import read_env  # noqa: E402  (테스트가 `scripts.step0_probe.read_env`로도 가져온다)
 
 
 @dataclass(frozen=True)
@@ -199,17 +197,6 @@ DEFAULT_FACTORIES: dict[str, Factory] = {
     "gemini-embed": _make_gemini_embed,
     "cohere-rerank": _make_cohere_rerank,
 }
-
-
-def read_env(dotenv_path: Path | str = ".env") -> dict[str, str]:
-    """`.env` 파일과 환경 변수를 합쳐 돌려준다. 같은 이름이면 환경 변수가 이긴다.
-
-    왜 필요한가: 앱 설정(`app/config.py`)은 `.env`를 읽는데, 이 측정 도구는 환경 변수만 읽어서
-    `.env`에 넣은 키가 보이지 않았다. 같은 우선순위(환경 변수 > .env)로 맞춰 두 곳 어디에 넣어도 동작하게 한다.
-    파일이 없으면 환경 변수만 돌려준다. 키 값은 이 함수 안에서도 출력하지 않는다.
-    """
-    from_file = {k: v for k, v in dotenv_values(dotenv_path).items() if v is not None}
-    return {**from_file, **os.environ}
 
 
 def main(
