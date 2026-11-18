@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     opensearch_user: str = "admin"
     index_name: str = "labor-rag-v1"
     sqlite_path: str = "data/app.db"
+    # 대화 체크포인트(LangGraph가 질문마다 쌓는 상태)는 앱 DB와 **다른 파일**에 둔다. 계속 커지는 파일이라 정리 스크립트
+    # (scripts/prune_checkpoints.py, 기본 대상이 이 경로)가 그 파일만 다루게 하려는 것이다.
+    checkpoint_path: str = "data/checkpoints.db"
     # 이 주소에서 온 요청의 X-Forwarded-For만 믿는다(위조된 헤더로 IP 제한을 우회하는 것을 막는다).
     trusted_proxies: list[str] = Field(default_factory=lambda: ["127.0.0.1"])
 

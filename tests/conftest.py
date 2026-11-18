@@ -14,10 +14,19 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any
 
+import bcrypt
+import pytest
 from pydantic import BaseModel
 
 from app.config import Settings
 from app.domain.models import Chunk, Hit, RerankResult
+
+# 로그인 시험에 쓰는 비밀번호와 그 bcrypt 해시. 앱은 시작할 때 해시 형식을 검사하므로(깨진 해시로 조용히 도는 것을 막으려고)
+# 가짜 문자열이 아니라 진짜 해시여야 한다. rounds=4는 bcrypt가 허용하는 최소 비용이라 테스트가 빨리 돈다(운영 기본값은 12).
+ADMIN_PASSWORD = "admin-pw-for-tests"
+TEST_PASSWORD = "test-pw-for-tests"
+ADMIN_HASH = bcrypt.hashpw(ADMIN_PASSWORD.encode(), bcrypt.gensalt(rounds=4)).decode()
+TEST_HASH = bcrypt.hashpw(TEST_PASSWORD.encode(), bcrypt.gensalt(rounds=4)).decode()
 
 
 def settings_factory(**overrides: Any) -> Settings:
@@ -31,8 +40,8 @@ def settings_factory(**overrides: Any) -> Settings:
         "gemini_api_key": "test-gemini-key",
         "cohere_api_key": "test-cohere-key",
         "opensearch_password": "test-opensearch-password",
-        "admin_password_hash": "test-admin-hash",
-        "test_password_hash": "test-test-hash",
+        "admin_password_hash": ADMIN_HASH,
+        "test_password_hash": TEST_HASH,
         "session_secret": "test-session-secret",
         "langfuse_public_key": "test-langfuse-public",
         "langfuse_secret_key": "test-langfuse-secret",
@@ -321,3 +330,32 @@ def deps_with(llm: Any, **overrides: Any) -> Any:
     }
     values.update(overrides)
     return GraphDeps(**values)
+
+
+# ---- API 테스트용 픽스처 (Task 14) ----
+# import를 함수 안에 두는 이유: app.api는 Task 14에서 생겼고, 이 파일을 쓰는 다른 테스트(그래프·색인)가 FastAPI를
+# 불러오느라 느려지지 않게 하려는 것이다.
+
+
+@pytest.fixture
+def api_app(tmp_path):
+    """가짜 LLM·검색·리랭커로 만든 앱(로그인한 계정·SQLite는 tmp_path 안). 그래프는 진짜 LangGraph이고 부품만 가짜다."""
+    from tests.api_support import make_app
+
+    return make_app(tmp_path)
+
+
+@pytest.fixture
+async def admin_cookie(api_app) -> str:
+    """`admin`으로 로그인해 얻은 세션 쿠키 값."""
+    from tests.api_support import login_cookie
+
+    return await login_cookie(api_app, "admin", ADMIN_PASSWORD)
+
+
+@pytest.fixture
+async def test_cookie(api_app) -> str:
+    """`test`로 로그인해 얻은 세션 쿠키 값."""
+    from tests.api_support import login_cookie
+
+    return await login_cookie(api_app, "test", TEST_PASSWORD)

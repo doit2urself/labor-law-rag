@@ -34,3 +34,9 @@ def test_opensearch_defaults_expect_security_on():
 def test_env_variables_use_labor_prefix(monkeypatch):
     monkeypatch.setenv("LABOR_MAX_LLM_CALLS", "3")
     assert settings_factory().max_llm_calls == 3
+
+
+# 대화 체크포인트는 앱 DB(data/app.db)와 다른 파일에 둔다. 정리 스크립트(prune_checkpoints.py)의 기본 대상과 같은 경로다.
+def test_checkpoint_file_is_separate_from_the_app_db():
+    s = settings_factory()
+    assert s.checkpoint_path == "data/checkpoints.db" and s.checkpoint_path != s.sqlite_path

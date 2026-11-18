@@ -14,6 +14,19 @@ PII_NOTICE = "개인정보를 입력하지 마세요"
 QUOTA_MESSAGE = "오늘의 무료 사용 한도가 소진되었습니다. 나중에 다시 시도해 주세요"
 
 
+# API가 사용자에게 보여 주는 나머지 안내 문구. 서버 안의 원인(예외 내용, 외부 서비스 응답)은 화면에 싣지 않고 이 문구만 보낸다.
+INTERNAL_ERROR_MESSAGE = "일시적인 오류로 답변하지 못했습니다. 잠시 후 다시 시도해 주세요"
+LOGIN_REQUIRED_MESSAGE = "로그인이 필요합니다."
+LOGIN_FAILED_MESSAGE = "아이디 또는 비밀번호가 올바르지 않습니다."
+LOGIN_THROTTLED_MESSAGE = "로그인 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요."
+INVALID_REQUEST_MESSAGE = "요청 형식이 올바르지 않습니다."
+
+
+def invalid_question_message(max_chars: int) -> str:
+    """빈 질문이거나 너무 긴 질문일 때의 안내 문구."""
+    return f"질문은 1자 이상 {max_chars}자 이하로 입력해 주세요."
+
+
 def limit_exceeded_message(limit: int) -> str:
     """`test` 계정이 같은 IP에서 사용 횟수(limit)를 넘겼을 때의 안내 문구를 만든다."""
     return f"이 IP의 사용 횟수({limit}회)를 초과했습니다."
