@@ -37,7 +37,9 @@ class Settings(BaseSettings):
     max_question_chars: int = 1000  # 이보다 긴 질문은 거절한다.
 
     # --- 검색 ---
-    search_depth: int = 150  # 하위 쿼리마다 가져올 후보 수. Task 9에서 100·150·200을 비교해 정한다.
+    # 하위 쿼리마다 가져올 후보 수. Task 9 Step 7에서 100·150·200을 비교했고(docs/step0-report.md 8절) 가장 좋았던 100을 사용자가
+    # 골랐다(2026-11-18). 차이가 우연일 수 있어(질문 34개, 한 번 실행) Task 17 전체 평가에서 다시 확인한다.
+    search_depth: int = 100
     # 충분성 판단 임계값: 리랭크 1위 점수가 이보다 낮으면 "근거 부족". Task 9 측정(docs/step0-report.md 8절)의 일상어형
     # 후보를 사용자가 정했다(2026-11-18). 표본이 작아서(정답 없는 질문 6건) 서비스 전체를 돌리는 Task 17에서 다시 잰다.
     rerank_min_score: float = 0.15

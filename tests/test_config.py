@@ -14,7 +14,9 @@ def test_defaults_match_spec():
     assert (s.test_ip_limit, s.rerank_monthly_cap, s.max_llm_calls) == (5, 950, 8)
     assert (s.max_regen, s.max_research, s.max_question_chars) == (2, 2, 1000)
     # 0.15 = Task 9 Step 7 측정(docs/step0-report.md 8절)의 일상어형 후보를 사용자가 정했다(2026-11-18). 임시값이 아니다.
-    assert (s.search_depth, s.rerank_min_score) == (150, 0.15)
+    # 깊이 100은 Task 9 Step 7 측정에서 가장 좋았고(일상어형 Recall@20 0.94 vs 0.86·0.90) 값이 작아 가볍다. 우연일 수 있어
+    # Task 17 전체 평가에서 다시 확인한다.
+    assert (s.search_depth, s.rerank_min_score) == (100, 0.15)
 
 
 # 비밀번호 원문 필드는 없고, 필수 값이 없으면 설정 생성이 실패하는지 확인한다.
