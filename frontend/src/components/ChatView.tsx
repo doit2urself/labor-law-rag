@@ -32,6 +32,9 @@ export function ChatView({ onSessionExpired }: ChatViewProps) {
   useEffect(() => () => abortRef.current?.abort(), []);
 
   // 새 내용이 생기면 맨 아래로 스크롤한다. (테스트 환경의 jsdom에는 scrollIntoView가 없어서 ?.로 건너뛴다)
+  // 핵심 개념 — 스크롤 목표를 입력창 **뒤**에 둔 이유: 입력창(.composer)은 화면 아래에 고정(position: sticky)되어 그 위의 내용을 덮는다.
+  // 목표가 입력창 앞(대화 목록 끝)에 있으면 그 지점을 화면 맨 아래에 맞추는 순간 마지막 답변의 아랫부분(출처 카드·법제처 표기·👍/👎)이
+  // 입력창 밑에 깔린다(실제 브라우저에서 약 146px). 문서의 진짜 끝에 맞추면 입력창이 제 자리에 놓이고 내용은 그 위에 온전히 보인다.
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ behavior: "smooth", block: "end" });
   }, [turns]);
@@ -118,7 +121,6 @@ export function ChatView({ onSessionExpired }: ChatViewProps) {
             {turn.answer && <AnswerView answer={turn.answer} turnId={turn.id} />}
           </div>
         ))}
-        <div ref={endRef} />
       </div>
 
       <form
@@ -150,6 +152,8 @@ export function ChatView({ onSessionExpired }: ChatViewProps) {
           </button>
         </div>
       </form>
+      {/* 자동 스크롤의 목표. 입력창보다 뒤(문서의 진짜 끝)에 둔다 — 아래 useEffect의 설명 참고. */}
+      <div ref={endRef} />
     </section>
   );
 }

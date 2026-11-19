@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ApiError, sendFeedback, streamChat } from "./api";
 import { ChatView } from "./components/ChatView";
 import { makeAnswer, SOURCES, THREAD_ID } from "./test-fixtures";
@@ -289,5 +289,39 @@ describe("ChatView — 피드백", () => {
     await ask(user, "q");
     await screen.findByText("범위 밖입니다.");
     expect(screen.queryByRole("button", { name: "도움이 됐어요" })).not.toBeInTheDocument();
+  });
+});
+
+describe("ChatView — 자동 스크롤", () => {
+  // jsdom에는 scrollIntoView가 없어서, 달린 곳(this)을 기록하는 가짜를 끼워 두고 시험이 끝나면 치운다.
+  const scrolledTo: Element[] = [];
+  beforeEach(() => {
+    scrolledTo.length = 0;
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      value: function (this: Element) {
+        scrolledTo.push(this);
+      },
+    });
+  });
+  afterEach(() => {
+    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+  });
+
+  // 입력창은 화면 아래에 고정(sticky)되어 그 위의 내용을 덮는다. 스크롤 목표가 입력창보다 **앞**에 있으면, 목표를 화면 맨 아래에 맞추는
+  // 순간 마지막 답변의 아랫부분(출처 카드·법제처 표기·👍/👎)이 입력창 밑에 깔린다(실제 브라우저에서 약 146px, 2026-11-19 측정).
+  // 그래서 스크롤 목표는 입력창과 같거나 그보다 **뒤**(문서의 진짜 끝)여야 한다.
+  test("scrolls to the real end of the page, not to a spot the composer covers", async () => {
+    serverSends(...PROGRESS, { type: "answer", data: makeAnswer() });
+    const { user } = renderChat();
+    await ask(user, "주휴수당이 뭐야?");
+    await screen.findByRole("article", { name: "답변" });
+
+    const composer = screen.getByLabelText("질문 입력").closest("form") as HTMLFormElement;
+    expect(scrolledTo.length).toBeGreaterThan(0);
+    const target = scrolledTo[scrolledTo.length - 1];
+    const sameOrAfterComposer =
+      target === composer || (composer.compareDocumentPosition(target) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    expect(sameOrAfterComposer).toBe(true);
   });
 });
