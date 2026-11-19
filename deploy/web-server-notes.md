@@ -110,6 +110,22 @@ Step 5(앱 배포), Step 6(Caddy + IP 인증서), Step 7(끝에서 끝까지 확
 | 위 시험이 통과한 의미 | — | Caddy가 위조된 `X-Forwarded-For`를 덮어쓰거나, 앱의 `client_ip`가 오른쪽부터 읽어 걸러 낸다(둘 중 무엇이 막았는지는 구분하지 않았다). 어느 쪽이든 서버 전체 경로에서 우회가 되지 않았다 |
 | 시험의 한계 | — | 질문은 모두 범위 밖 질문이라 분석 단계에서 거절되었다(검색·리랭크·생성은 이 시험에서 쓰이지 않음). 실제 검색·답변 경로의 서버 동작은 Step 8의 평가 실행으로 본다. IP를 하나만 써서 시험했다(다른 IP에서의 동작은 코드 시험으로만 확인) |
 
+### 4-4. 화면 파일만 다시 배포하기 — 스크롤 수정 (2026-11-19, 사용자 승인)
+
+화면(프런트엔드)만 바뀌었을 때의 절차다. 서버에서 앱·Caddy를 다시 시작할 필요가 없다(Caddy가 파일을 그대로 읽는다).
+
+| # | 한 일 | 결과 |
+|---|---|---|
+| 1 | 이 PC에서 `npm --prefix frontend run build`(`tsc` 검사 포함), 결과 `frontend/dist`의 파일 4개를 파이썬 `tarfile`로 묶음(경로는 `dist` 안쪽 기준: `index.html`, `assets/…`) | 새 번들 `assets/index-DVro-uU0.js`(옛 번들은 `index-Bl17LZV3.js`) |
+| 2 | `scp`로 `/tmp`에 올림 → 서버에서 `cp -a /var/www/labor-rag /var/www/labor-rag.prev`(되돌리기용 백업) → `tar -xf … -C /var/www/labor-rag --no-same-owner` → `chmod -R a+rX /var/www/labor-rag` → 묶음 삭제 | 옛 `assets`는 **지우지 않고** 덮어쓰기만 했다. 옛 `index.html`을 캐시한 브라우저가 옛 번들 파일을 찾지 못해 빈 화면이 되는 일을 막기 위해서다. 정리는 나중에 `rm /var/www/labor-rag/assets/index-Bl17LZV3.js` |
+| 3 | 확인: PC에서 `https://<ip>/`가 가리키는 번들을 내려받아 로컬 빌드와 SHA-256 비교 | **해시 동일**(앞 16자리 `99776FBEA4D11DA4`). 옛 번들도 HTTP 200으로 계속 나간다. `/api/health` 정상 |
+
+되돌리기: `rm -rf /var/www/labor-rag && mv /var/www/labor-rag.prev /var/www/labor-rag`.
+
+알아 둘 것:
+- **서버의 `/opt/labor-rag/frontend/src`는 옛 소스 그대로다**(이번에는 서버에서 화면을 빌드하지 않으므로 `dist`만 올렸다). 서버에서 `pytest`를 다시 돌릴 때 `tests/test_frontend_texts.py`는 `texts.ts`만 읽어서 영향이 없다. 소스를 서버와 맞추려면 `git archive`(LF)로 다시 올린다(3-1절).
+- 이 수정이 서버의 실제 화면에서 사용자 눈에 어떻게 보이는지는 **사용자 확인 전**이다. 측정은 이 PC의 가짜 서버 + 진짜 SSE 샘플 + Edge 조합에서 했다.
+
 ## 5. 서버에서 확인할 것
 
 | 항목 | 방법 | 결과 |
