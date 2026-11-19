@@ -24,7 +24,7 @@ from app.api.auth import SessionCodec, looks_like_bcrypt
 from app.api.limits import LoginThrottle, validate_trusted_proxies
 from app.api.routes import make_feedback_handler, router
 from app.config import Settings
-from app.container import build_graph_factory
+from app.container import build_graph_factory, build_health_probe
 from app.observability.langfuse_setup import NullTracing, Tracing, build_langfuse
 from app.texts import INVALID_REQUEST_MESSAGE
 
@@ -43,6 +43,11 @@ def _check_settings(settings: Settings) -> None:
     validate_trusted_proxies(settings.trusted_proxies)
 
 
+def _no_search_engine() -> tuple[str, int]:
+    """상태를 물을 검색엔진이 없는 앱(시험용 경로)의 상태 확인 함수: 항상 실패해서 `/api/health`가 "down"으로 답하게 한다."""
+    raise RuntimeError("검색엔진이 연결되지 않은 앱입니다")
+
+
 async def _validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     """형식이 틀린 요청을 422로 돌려준다. 기본 응답은 오류 목록(JSON 배열)이라 화면이 그대로 보여 줄 수 없어서 문장으로 바꾼다.
 
@@ -57,6 +62,7 @@ def create_app(
     settings: Settings | None = None,
     graph_factory: Callable[[], CompiledStateGraph] | None = None,
     tracing: Tracing | None = None,
+    health_probe: Callable[[], tuple[str, int]] | None = None,
 ) -> FastAPI:
     """앱을 만든다.
 
@@ -64,6 +70,9 @@ def create_app(
     graph_factory: 그래프를 만드는 함수. 없으면 진짜 부품을 끼운 그래프(container.py)를 쓴다. 테스트는 가짜 부품 그래프를 넘긴다.
     tracing: 관측(Langfuse) 연결. 없으면 **그래프도 따로 주지 않은 운영 경로**에서만 진짜 Langfuse 연결을 만든다. 시험처럼 그래프를
         직접 넘긴 경우에는 꺼진 연결(NullTracing)을 끼운다 — 가짜 키로 진짜 Langfuse 클라이언트를 만들어 두지 않기 위해서다.
+    health_probe: `/api/health`가 검색엔진 상태를 묻는 함수 `() -> (상태, 문서 수)`. 없으면 tracing과 같은 규칙이다: 운영 경로에서만
+        진짜 OpenSearch를 묻고, 그래프를 직접 넘긴 경우에는 "묻을 검색엔진이 없음"(→ "down")으로 둔다. 가짜 그래프 뒤에서 "green"이라고
+        답하는 일이 없게 하려는 것이다.
     """
     if settings is None:
         settings = Settings()
@@ -77,6 +86,8 @@ def create_app(
     if tracing is None:
         tracing = build_langfuse(settings) if graph_factory is None else NullTracing()
     factory = graph_factory if graph_factory is not None else build_graph_factory(settings, store, tracing)
+    if health_probe is None:
+        health_probe = build_health_probe(settings) if graph_factory is None else _no_search_engine
 
     app = FastAPI(title="근로·노동 상담 RAG")
     app.state.settings = settings
@@ -85,6 +96,7 @@ def create_app(
     app.state.sessions = SessionCodec(settings.session_secret)
     app.state.login_throttle = LoginThrottle()
     app.state.tracing = tracing
+    app.state.health_probe = health_probe
     app.state.feedback_handler = make_feedback_handler(tracing)
     app.add_exception_handler(RequestValidationError, _validation_error_handler)
     app.include_router(router)

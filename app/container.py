@@ -65,6 +65,16 @@ def build_deps(settings: Settings, store: AppStore, tracing: Tracing | None = No
     )
 
 
+def build_health_probe(settings: Settings) -> Callable[[], tuple[str, int]]:
+    """`/api/health`가 부르는 검색엔진 상태 확인 함수를 만든다: `() -> (상태, 색인 문서 수)`.
+
+    만들 때 네트워크를 쓰지 않는다(위 약속). 부를 때 OpenSearch가 응답하지 않으면 예외가 올라가고, 엔드포인트가 "down"으로 바꾼다.
+    그래프용 클라이언트와 따로 하나를 더 만든다: 상태 확인은 짧은 요청이라 연결을 공유할 이유가 없고, 서로의 실패에 영향받지 않는다.
+    """
+    client = make_client(settings.opensearch_url, settings.opensearch_user, settings.opensearch_password)
+    return OpenSearchStore(client, settings.index_name).health
+
+
 def build_graph_factory(
     settings: Settings, store: AppStore | None = None, tracing: Tracing | None = None
 ) -> Callable[[], CompiledStateGraph]:

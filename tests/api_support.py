@@ -37,6 +37,7 @@ def make_app(
     llm: Any = None,
     graph_factory: Callable[[], Any] | None = None,
     tracing: Any = None,
+    health_probe: Callable[[], tuple[str, int]] | None = None,
     **settings_overrides: Any,
 ) -> FastAPI:
     """가짜 부품 그래프로 앱을 만든다. SQLite 파일은 모두 tmp_path 안(실제 data/ 폴더를 건드리지 않는다).
@@ -44,6 +45,7 @@ def make_app(
     llm: 그래프가 쓸 가짜 LLM(없으면 평범한 상담 시나리오). 호출 수를 세려면 호출한 쪽이 직접 만들어 넘기고 들고 있는다.
     graph_factory: 그래프 조립을 통째로 바꿀 때만 쓴다(없으면 위의 llm으로 진짜 그래프를 만든다).
     tracing: 관측(Langfuse) 연결. 없으면 create_app이 꺼진 연결(NullTracing)을 끼운다.
+    health_probe: `/api/health`가 부르는 검색엔진 상태 확인 함수 `() -> (상태, 문서 수)`. 없으면 초록 불에 문서 3개인 가짜를 끼운다.
     settings_overrides: Settings 값을 바꾼다. 예: `make_app(tmp_path, test_ip_limit=3)`.
     """
     settings = settings_factory(
@@ -57,7 +59,7 @@ def make_app(
         def graph_factory() -> Any:
             return build_graph(deps_with(the_llm, settings=settings), InMemorySaver(serde=checkpoint_serde()))
 
-    return create_app(settings, graph_factory, tracing)
+    return create_app(settings, graph_factory, tracing, health_probe or (lambda: ("green", 3)))
 
 
 def make_client(app: FastAPI, cookie: str | None = None, peer: tuple[str, int] = (PEER_IP, 5000)) -> httpx.AsyncClient:

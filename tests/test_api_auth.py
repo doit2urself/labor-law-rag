@@ -162,7 +162,7 @@ async def test_malformed_login_body_gives_422_with_text_detail(api_app):
 async def test_health_needs_no_login(api_app):
     async with make_client(api_app) as client:
         response = await client.get("/api/health")
-    assert (response.status_code, response.json()) == (200, {"status": "ok"})
+    assert (response.status_code, response.json()) == (200, {"status": "ok", "opensearch": "green", "index_docs": 3})
 
 
 # ---- 시작할 때의 설정 검증과 계정 동기화 ----

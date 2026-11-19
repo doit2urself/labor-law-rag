@@ -7,7 +7,8 @@
 - POST /api/login {"username","password"} → 200 {"username","role"} + 세션 쿠키 / 401 / 429(시도가 너무 많음)
 - POST /api/logout, GET /api/me → {"username","role"}
 - POST /api/chat {"thread_id": UUID|null, "question"} → 200 text/event-stream / 401 / 422 / 429(`test`의 IP별 5회 초과)
-- POST /api/feedback {"message_id", "value": 1|-1}, GET /api/health → {"status": "ok"}
+- POST /api/feedback {"message_id", "value": 1|-1}
+- GET /api/health → {"status": "ok", "opensearch": "green"|"yellow"|"red"|"down", "index_docs": int} (로그인 불필요)
 HTTP 오류의 본문은 `{"detail": "화면에 그대로 보여 줄 문장"}`이다.
 
 SSE 이벤트(채팅 응답 본문): `event: 이름\\ndata: JSON\\n\\n` 형식.
@@ -236,7 +237,24 @@ def feedback(body: FeedbackBody, request: Request, user: User = Depends(current_
     return {"status": "ok"}
 
 
+# 계약에 있는 OpenSearch 상태값. 이 밖의 값(unknown 등)은 "down"으로 접는다.
+_OPENSEARCH_STATES = ("green", "yellow", "red")
+
+
 @router.get("/health")
-def health() -> dict:
-    """로그인 없이 부를 수 있는 생존 확인. 배포(Task 18)에서 OpenSearch 상태와 색인 문서 수를 더한다."""
-    return {"status": "ok"}
+def health(request: Request) -> dict:
+    """로그인 없이 부를 수 있는 상태 확인: `{"status", "opensearch": green|yellow|red|down, "index_docs"}`.
+
+    `status`는 이 앱이 응답하고 있다는 뜻이라 늘 "ok"다. 검색엔진 상태는 따로 `opensearch`에 담는다 — "서버는 떠 있는데 검색엔진이
+    죽었다"를 한 번의 호출로 구분하려는 것이다. 검색엔진이 응답하지 않아도 500이 아니라 `down`과 0으로 답한다.
+    오류 메시지는 응답에 싣지 않는다(접속 정보가 섞여 있을 수 있고, 로그인 없이 누구나 부를 수 있는 주소다). 예외 종류만 로그에 남긴다.
+    `def`(async 아님)인 이유: 검색엔진 호출이 막는(blocking) 호출이라 별도 스레드에서 돌려야 서버가 멈추지 않는다.
+    """
+    try:
+        opensearch, index_docs = request.app.state.health_probe()
+    except Exception as exc:  # 어떤 실패든 "down"으로 답한다(상태 확인이 스스로 죽으면 안 된다)
+        logger.warning("OpenSearch 상태 확인 실패: %s", type(exc).__name__)
+        opensearch, index_docs = "down", 0
+    if opensearch not in _OPENSEARCH_STATES:
+        opensearch = "down"
+    return {"status": "ok", "opensearch": opensearch, "index_docs": index_docs}

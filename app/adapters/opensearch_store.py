@@ -30,6 +30,9 @@ from app.scope import COVERED_LAWS
 _HNSW_M = 16
 _HNSW_EF_CONSTRUCTION = 100
 
+# 상태 확인(`OpenSearchStore.health`)이 응답을 기다리는 최대 시간(초). 이 호출은 로그인 없이 부를 수 있어서 짧게 끊는다.
+_HEALTH_TIMEOUT_S = 3
+
 # "제55조", "제 55 조", "제43조의2"에서 조문번호를 뽑는 규칙. 가지번호는 "43의2" 꼴로 모은다
 # (파서의 Chunk.article_no와 같은 표기라서 keyword 정확 일치가 된다).
 _ARTICLE_RE = re.compile(r"제\s*(\d+)\s*조(?:\s*의\s*(\d+))?")
@@ -296,6 +299,18 @@ class OpenSearchStore:
             body={"size": 0, "aggs": {"sources": {"terms": {"field": "source_id", "size": 10000}}}},
         )
         return {bucket["key"] for bucket in response["aggregations"]["sources"]["buckets"]}
+
+    def health(self) -> tuple[str, int]:
+        """이 색인의 상태("green"/"yellow"/"red")와 색인된 문서 수를 돌려준다(`/api/health`가 쓴다).
+
+        색인 이름으로 좁혀 묻는다: 클러스터 전체가 아니라 우리 색인의 상태만 알면 되고, 다른 색인이 생겨도 영향받지 않는다.
+        단일 노드는 복제본을 둘 곳이 없어서 정상이어도 yellow일 수 있다(그래서 yellow도 "살아 있음"으로 본다).
+        `request_timeout`: 검색엔진이 멈췄을 때 상태 확인이 스레드를 오래 붙잡지 않도록 짧게 끊는다.
+        응답하지 않으면 예외가 그대로 올라간다 — 그것을 "down"으로 바꾸는 일은 엔드포인트가 맡는다(어댑터가 정상을 지어내지 않는다).
+        """
+        status = self._client.cluster.health(index=self._index, request_timeout=_HEALTH_TIMEOUT_S)["status"]
+        count = self._client.count(index=self._index, request_timeout=_HEALTH_TIMEOUT_S)["count"]
+        return str(status), int(count)
 
     def search(
         self,

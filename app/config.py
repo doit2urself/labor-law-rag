@@ -58,8 +58,12 @@ class Settings(BaseSettings):
     # 이 주소에서 온 요청의 X-Forwarded-For만 믿는다(위조된 헤더로 IP 제한을 우회하는 것을 막는다).
     trusted_proxies: list[str] = Field(default_factory=lambda: ["127.0.0.1"])
 
+    # 법제처 Open API 인증값. v1은 API를 쓰지 않고 파일로 수집하므로(스펙 개정 1) **필수가 아니다** — 빈 값이어도 서버가 시작된다.
+    # 쓰지 않는 값 때문에 시작이 막히는 것을 없애려는 것이다. 나중에 API 수집(scripts/collect.py)으로 돌아가면 그 스크립트가 이 값이
+    # 비었는지 스스로 확인한다.
+    law_api_oc: str = ""
+
     # --- 필수 값(기본값 없음): 서버 .env에서만 채운다 ---
-    law_api_oc: str
     gemini_api_key: str
     cohere_api_key: str
     opensearch_password: str  # 설치할 때 사용자가 서버에서 직접 정한 admin 비밀번호. 서버 .env에만 둔다.

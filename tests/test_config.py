@@ -33,6 +33,19 @@ def test_opensearch_defaults_expect_security_on():
     assert Settings.model_fields["opensearch_password"].is_required()
 
 
+# 법제처 Open API는 v1에서 쓰지 않으므로(스펙 개정 1) 서버 .env에 LABOR_LAW_API_OC가 없어도 서버가 시작된다.
+# 나머지 비밀 값(키·해시·세션 비밀)은 빠지면 시작이 실패해야 한다 — 이 시험이 "필수 해제"가 번지지 않게 막는다.
+def test_law_api_oc_is_optional_but_every_other_secret_stays_required():
+    assert not Settings.model_fields["law_api_oc"].is_required()
+    secrets = {
+        "gemini_api_key", "cohere_api_key", "opensearch_password", "admin_password_hash", "test_password_hash",
+        "session_secret", "langfuse_public_key", "langfuse_secret_key", "langfuse_host",
+    }
+    assert all(Settings.model_fields[name].is_required() for name in secrets)
+    values = {name: "x" for name in secrets}
+    assert Settings(_env_file=None, **values).law_api_oc == ""  # 값이 없을 때의 기본은 빈 문자열
+
+
 # 환경 변수는 LABOR_ 접두어로 읽혀야 한다(서버 .env가 쓰는 방식).
 def test_env_variables_use_labor_prefix(monkeypatch):
     monkeypatch.setenv("LABOR_MAX_LLM_CALLS", "3")
