@@ -126,6 +126,25 @@ Step 5(앱 배포), Step 6(Caddy + IP 인증서), Step 7(끝에서 끝까지 확
 - **서버의 `/opt/labor-rag/frontend/src`는 옛 소스 그대로다**(이번에는 서버에서 화면을 빌드하지 않으므로 `dist`만 올렸다). 서버에서 `pytest`를 다시 돌릴 때 `tests/test_frontend_texts.py`는 `texts.ts`만 읽어서 영향이 없다. 소스를 서버와 맞추려면 `git archive`(LF)로 다시 올린다(3-1절).
 - 이 수정이 서버의 실제 화면에서 사용자 눈에 어떻게 보이는지는 **사용자 확인 전**이다. 측정은 이 PC의 가짜 서버 + 진짜 SSE 샘플 + Edge 조합에서 했다.
 
+### 4-5. 최종 검토 수정 3건 반영 (2026-11-19, 사용자 승인, 명령마다 확인)
+
+코드 커밋 `0ecfd00`(I-2), `85ee7f4`(I-1·M-2), `bd44685`(I-3). 의존성(`requirements.txt`)은 바뀌지 않아서 `pip`를 다시 돌리지 않았다.
+
+| # | 구분 | 한 일 | 결과 |
+|---|---|---|---|
+| 1 | 변경 | 현재 서버 코드를 `/root/labor-rag-code-before-final-fixes.tgz`로 백업(`.venv`·`data`·`.env`·`frontend/dist`·`node_modules` 제외) | 약 58MB(서버의 `pip` 캐시 `.cache`가 섞여 있다), `.env`·`.venv` 항목 0건. **되돌리기**: `tar -xzf` 그 파일 `-C /opt/labor-rag` → `chown -R labor:labor /opt/labor-rag` → `systemctl restart labor-rag` |
+| 2 | 변경 | `git -c core.autocrlf=false -c core.eol=lf archive`로 만든 묶음(173개 파일, CR 0개, 1.5MB)을 `scp`로 올려 `/opt/labor-rag`에 덮어쓰고 `chown -R labor:labor` | `.env`는 권한 600·소유자 `labor` 그대로. 서버의 `deploy/labor-rag-prune.service`도 CR 0개 |
+| 3 | 읽기 | 서버에서 `pytest -q`(labor 계정, 파이썬 3.12) | **629 passed, 4 skipped, 8 deselected.** 건너뛴 4개는 전과 같은 `data/manual` 없음. 이 PC의 633 passed와 합이 같다(629+4) |
+| 4 | 변경 | 정리 유닛 두 개를 `/etc/systemd/system`에 복사, `systemctl daemon-reload`, `systemd-analyze verify` | 문법 검사 종료 코드 0 |
+| 5 | 읽기 | `scripts/prune_checkpoints.py --days 30 --dry-run`(labor 계정) | "30일보다 오래된 대화 0개" (대화가 모두 오늘 것이라 예상대로) |
+| 6 | 변경 | `systemctl enable --now labor-rag-prune.timer`, `systemctl start labor-rag-prune.service`로 한 번 실행 | 서비스 결과 `success`(샌드박스 `ProtectSystem=strict` 안에서 `data`에 쓰기 포함). 삭제 0개. `checkpoints.db`와 `-wal`·`-shm`의 소유자는 모두 `labor`. 타이머 다음 실행 2026-11-20 00:24(서버 시각). **되돌리기**: `systemctl disable --now labor-rag-prune.timer; rm /etc/systemd/system/labor-rag-prune.{service,timer}; systemctl daemon-reload` |
+| 7 | 변경 | `systemctl restart labor-rag` | 05:04:21(서버 시각)에 다시 시작, 시작 로그에 오류 없음. 코드 파일 수정 시각(04:50)보다 늦어 새 코드를 읽었다(추론: 파이썬은 시작할 때 코드를 읽는다). 서버 안 `/api/health` `{"status":"ok","opensearch":"green","index_docs":732}`, `/api/me`(로그인 없이) 401. 밖에서 `https://<ip>/api/health` 같은 값, 인증서 검증 통과 |
+
+확인하지 못한 것:
+- 새 제한 시간(LLM 30초·임베딩 15초·리랭크 15초)이 **운영에서 실제로 시간 초과를 일으키는지 / 정상 응답을 끊는지는 보지 못했다.** 시작값이다. 서버 안 테스트는 설정이 어댑터에 전달되는 것까지만 확인한다. 로그에 시간 초과가 나오면 값을 조정한다.
+- 재시작 순간 진행 중이던 답변이 있었는지는 모른다(확인하지 않았다).
+- 정리 타이머의 **자동 실행**은 아직 한 번도 일어나지 않았다(수동으로 시작한 1회만 성공). 2026-11-20 00:24 이후 `journalctl -u labor-rag-prune`으로 확인한다.
+
 ## 5. 서버에서 확인할 것
 
 | 항목 | 방법 | 결과 |
