@@ -1,0 +1,18 @@
+# 체크포인트 정리를 매일 한 번 깨우는 타이머 (서비스: labor-rag-prune.service).
+# 설치 위치: /etc/systemd/system/labor-rag-prune.timer  →  systemctl daemon-reload && systemctl enable --now labor-rag-prune.timer
+# 확인: systemctl list-timers labor-rag-prune.timer  /  마지막 실행 결과: journalctl -u labor-rag-prune
+#
+# 상태: 파일과 시험(tests/test_deploy_units.py)만 있고 **서버에는 아직 올리지 않았다**.
+
+[Unit]
+Description=Daily pruning of old conversation checkpoints
+
+[Timer]
+# 매일 0시(서버 시각). 서버가 꺼져 있어서 놓친 실행은 켜질 때 한 번 따라잡는다(Persistent).
+OnCalendar=daily
+Persistent=true
+# 정각에 몰리지 않게 최대 30분 흩뜨린다.
+RandomizedDelaySec=30min
+
+[Install]
+WantedBy=timers.target

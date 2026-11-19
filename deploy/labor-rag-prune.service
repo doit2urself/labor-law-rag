@@ -1,0 +1,30 @@
+# 오래된 대화의 체크포인트를 지우는 작업 (스펙 6.4: "체크포인트가 쌓이므로 주기적으로 정리한다").
+# 설치 위치: /etc/systemd/system/labor-rag-prune.service (타이머 labor-rag-prune.timer가 매일 이 서비스를 깨운다)
+#
+# 상태: 파일과 시험(tests/test_deploy_units.py)만 있고 **서버에는 아직 올리지 않았다**. 서버에 올리면 결과를 deploy/web-server-notes.md에 적는다.
+#
+# 왜 필요한가: data/checkpoints.db에는 질문 원문과 단계마다의 후보 본문이 대화(thread)별로 쌓인다. 정리하지 않으면 파일이 계속 커지고
+# 질문 원문이 기한 없이 남는다(화면의 "개인정보를 입력하지 마세요" 안내가 있어도 들어온 글은 남는다).
+
+[Unit]
+Description=Prune old conversation checkpoints of the labor RAG app
+# 앱이 켜져 있어도 된다: 정리 스크립트는 같은 SQLite 파일을 WAL 모드로 함께 열고 오래 기다리도록 만들어져 있다(app/container.py의 make_checkpointer).
+
+[Service]
+Type=oneshot
+# 앱(labor-rag.service)과 **같은 계정**으로 돌린다. root로 돌면 앱이 쓰는 SQLite 보조 파일(-wal, -shm)이 root 소유로 생겨서
+# 앱이 그 파일에 쓰지 못한다.
+User=labor
+Group=labor
+WorkingDirectory=/opt/labor-rag
+
+# 마지막 활동이 30일보다 오래된 대화만 지운다. 30일은 Langfuse 무료판의 보관 기간(스펙 6.7)과 맞춘 **시작값**이다. 최근까지 이어진 대화는
+# 지우지 않는다(기준은 대화의 가장 최근 체크포인트 시각). 먼저 지울 대상만 보려면 서버에서 같은 명령에 --dry-run을 붙여 실행한다.
+ExecStart=/opt/labor-rag/.venv/bin/python scripts/prune_checkpoints.py --days 30
+
+# 앱 유닛과 같은 보호 설정: 쓸 수 있는 곳은 data 폴더(SQLite)뿐이다.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/labor-rag/data
