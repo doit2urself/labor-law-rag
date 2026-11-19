@@ -1,7 +1,7 @@
 # 근로·노동 상담 RAG API를 서버에서 실행하는 systemd 유닛 (Task 18).
 # 설치 위치: /etc/systemd/system/labor-rag.service  →  systemctl daemon-reload && systemctl enable --now labor-rag
 #
-# 상태: 파일만 준비했고 **서버에서 아직 실행해 보지 않았다**(2026-11-19). 서버에서 켜 본 결과는 deploy/web-server-notes.md에 적는다.
+# 상태: 2026-11-19에 서버에서 켜서 정상 동작을 확인했다(권한을 줄이는 설정도 첫 시작에서 그대로 통과). 기록: deploy/web-server-notes.md 4-1절.
 #
 # 전제(배포 절차에서 만든다):
 #   - 코드와 가상환경: /opt/labor-rag (소유자 labor), 가상환경은 /opt/labor-rag/.venv

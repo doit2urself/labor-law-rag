@@ -1,7 +1,7 @@
 # 웹서버(Caddy) 설정 — 서버 IP로 접속하는 HTTPS (Task 18).
 # 설치 위치: /etc/caddy/Caddyfile
 #
-# 상태: 파일만 준비했고 **서버에서 아직 실행해 보지 않았다**(2026-11-19). 결과는 deploy/web-server-notes.md에 적는다.
+# 상태: 2026-11-19에 서버(Caddy v2.11.9)에서 실행해 Let's Encrypt IP 인증서 발급에 성공했다. 결과는 deploy/web-server-notes.md 4-2절.
 #
 # 서버 IP는 이 파일에 적지 않는다(저장소에 서버 주소를 두지 않는다). `{$LABOR_SERVER_IP}`는 Caddy가 시작할 때 환경 변수에서
 # 채운다. 서버의 /etc/systemd/system/caddy.service.d/ 에 Environment=LABOR_SERVER_IP=… 를 두는 방식이다(서버에서만 만든다).
@@ -40,8 +40,11 @@
 	}
 
 	# 그 밖의 주소는 화면 파일. 없는 경로는 index.html로(화면 안의 주소 이동을 화면이 처리한다).
+	# 화면 파일은 /opt/labor-rag 안이 아니라 /var/www/labor-rag에 따로 둔다: /opt/labor-rag는 labor 계정만 들어갈 수 있는 폴더(750)이고
+	# 안에 대화 기록(data/checkpoints.db)과 .env가 있다. Caddy 계정에 그 폴더를 열어 주면 웹서버가 뚫렸을 때 대화 기록이 같이 노출된다.
+	# 배포할 때마다: cp -r /opt/labor-rag/frontend/dist/. /var/www/labor-rag/
 	handle {
-		root * /opt/labor-rag/frontend/dist
+		root * /var/www/labor-rag
 		try_files {path} /index.html
 		file_server
 	}

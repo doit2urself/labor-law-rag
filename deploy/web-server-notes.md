@@ -4,8 +4,8 @@
 
 ## 1. 지금 상태
 
-**아직 서버에서 실행하지 않았다(2026-11-19).** 이 문서의 1~3절은 서버에 손대기 전에 공식 자료를 읽고 정한 계획이다.
-4절 이후(실행한 명령과 결과)는 서버 작업을 하면서 채운다. 채우지 않은 칸은 "측정 전"이라는 뜻이다.
+**서버에서 실행했다(2026-11-19).** 이 문서의 1~3절은 서버에 손대기 전에 공식 자료를 읽고 정한 계획이고, 4절은 실제로 실행한 명령과 결과다.
+Step 5(앱 배포)와 Step 6(Caddy + IP 인증서)은 끝났다. 5절의 "측정 전"은 아직 하지 않은 확인이다(Step 7에서 한다). 갱신이 실제로 되는지는 2026-11-22 이후에야 알 수 있다.
 
 ## 2. 웹서버 선택: Caddy를 먼저 시험하고, 안 되면 Nginx + ACME 클라이언트
 
@@ -33,7 +33,8 @@
 
 설계 결정과 이유:
 
-- **웹서버가 화면 파일을 직접 준다.** 화면은 `/api/...` 상대 경로만 부른다(`frontend/src/api.ts`). 그래서 Caddy가 `frontend/dist`를 주고 `/api/*`만 8000번으로 넘기면 된다. FastAPI에 정적 파일 서빙을 넣지 않았다(`app/api/main.py`는 그대로). 서버에는 node가 필요 없다 — 화면은 이 PC에서 `npm run build`한 결과만 옮긴다.
+- **화면 파일은 `/var/www/labor-rag`에 따로 둔다**(2026-11-19 수정). 처음 계획은 Caddy가 `/opt/labor-rag/frontend/dist`를 바로 읽는 것이었는데, 그 폴더는 `labor`만 들어갈 수 있고(750, 소유 `labor:labor`) Caddy 계정은 `caddy`(그룹 `caddy`,`www-data`)라 읽지 못한다(추론: 권한 값에서 나온 결론, 실제 오류는 보지 않았다). 폴더를 열어 주면 `data/checkpoints.db`(대화 기록)까지 보여서, 공개해도 되는 화면 파일만 복사했다.
+- **웹서버가 화면 파일을 직접 준다.** 화면은 `/api/...` 상대 경로만 부른다(`frontend/src/api.ts`). 그래서 Caddy가 화면 파일을 주고 `/api/*`만 8000번으로 넘기면 된다. FastAPI에 정적 파일 서빙을 넣지 않았다(`app/api/main.py`는 그대로). 서버에는 node가 필요 없다 — 화면은 이 PC에서 `npm run build`한 결과만 옮긴다.
 - **요청 본문 32KB 제한을 웹서버에서 건다.** 앱은 질문 글자 수(1,000자)만 제한하고 본문 크기는 제한하지 않는다(원장 Task 14 판정). 한글 1,000자 질문 + JSON 포장이 약 3.1KB(계산: 1,000자 × 3바이트 + 포장)라 32KB면 넉넉하다.
 - **HSTS 헤더는 넣지 않았다.** 인증서가 6일마다 갱신되는데 갱신이 어긋나면 HSTS 때문에 브라우저가 접속 자체를 막는다. 필요하면 갱신이 안정적으로 도는 것을 확인한 뒤 넣는다.
 - **`--no-proxy-headers`:** uvicorn이 `X-Forwarded-For`로 접속 주소를 바꾸는 기능을 끈다. IP를 읽는 규칙은 앱의 `client_ip`(접속 주소가 신뢰하는 프록시일 때만 헤더를 읽고 오른쪽부터 걷는다) 한 곳에서만 맡는다. 실제로 그렇게 도는지는 Step 7에서 확인한다(5절).
@@ -65,17 +66,48 @@
 
 배운 점: PowerShell 5.1에서 ssh로 넘기는 원격 명령에는 **큰따옴표를 쓰면 지워진다**(두 번 겪었다). 원격 명령은 작은따옴표 문자열 안에 큰따옴표 없이 쓰고, 따옴표가 필요하면 `''`로 쓴다.
 
-## 5. 서버에서 확인할 것 (아직 모름)
+### 4-2. 웹서버와 IP 인증서 (Step 6) — 2026-11-19, 명령마다 사용자 승인
+
+| # | 구분 | 한 일 | 결과 |
+|---|---|---|---|
+| 11 | 변경 | Caddy 공식 apt 저장소 등록(`dl.cloudsmith.io`의 서명 키·목록), `apt-get update`, 모의 실행(`apt-get install -s caddy`: 새 패키지 1개·업그레이드 0·삭제 0), `apt-get install -y caddy` | **Caddy v2.11.9**. `caddy` 계정(uid 995)과 `caddy.service`가 생기고 설치 직후 기본 화면으로 켜졌다. 서명 키는 처음 받은 것을 그대로 믿었다(별도 지문 대조 없음). 되돌리기: `apt-get remove --purge caddy; rm /etc/apt/sources.list.d/caddy-stable.list /usr/share/keyrings/caddy-stable-archive-keyring.gpg; apt-get update` |
+| 12 | 변경 | 서버 IP를 `/etc/systemd/system/caddy.service.d/labor-ip.conf`(`Environment=LABOR_SERVER_IP=…`)에 둠. PC가 ssh 설정의 주소를 임시 파일로 만들어 `scp`했고, 주소는 어떤 출력에도 찍지 않았다 | ssh 설정의 주소가 IPv4 숫자 주소임을 확인, 서버가 그 주소를 실제 네트워크 카드에 갖고 있음(`match`), CR 0개. 되돌리기: `rm -r /etc/systemd/system/caddy.service.d; systemctl daemon-reload` |
+| 13 | 읽기 | 기본 화면 상태에서 PC → 서버 80·443·9200 | 80: HTTP 200(**80번이 밖에서 닿는다**), 443: 연결 거부(아직 듣는 프로그램 없음), 9200: 연결 안 됨 |
+| 14 | 변경 | `/var/www/labor-rag`를 만들어 화면 파일 4개만 복사(`chmod -R a+rX`), 고친 `Caddyfile`을 `scp`, 기본 설정을 `/etc/caddy/Caddyfile.dist`로 백업하고 `/etc/caddy/Caddyfile`로 설치, `caddy validate` | `Valid configuration`. 되돌리기: `cp /etc/caddy/Caddyfile.dist /etc/caddy/Caddyfile; systemctl restart caddy; rm -rf /var/www/labor-rag` |
+| 15 | 변경 | `systemctl restart caddy` → Let's Encrypt에 IP 인증서 요청 | 로그: ACME 계정 새로 등록(이메일 없음) → `http-01` 챌린지 → 서버가 키 인증을 7번 응답(여러 곳에서 검증하는 것으로 보임, 추정) → `authorization finalized`(valid) → **`certificate obtained successfully`**(발급 시각 2026-11-19 01:44:33 UTC). 첫 시도에서 성공, 재시도 없음 |
+
+인증서 측정값(PC에서 `openssl s_client`, 주소는 가림):
+
+| 항목 | 값 |
+|---|---|
+| 발급자 | `C=US, O=Let's Encrypt, CN=YE1` |
+| 시작 | 2026-11-19 00:45:58 GMT |
+| 만료 | 2026-11-25 16:45:57 GMT |
+| 유효기간 | **159.9997시간**(계산: 만료 − 시작) → 계획서 기대값(약 160시간)과 같다 |
+
+밖(이 PC)에서 확인한 것:
+
+| 호출 | 결과 |
+|---|---|
+| `https://<ip>/` (인증서 검증 켜짐, Windows 인증서 저장소) | HTTP 200, `ssl_verify_result=0`(검증 통과), HTTP/1.1 |
+| `https://<ip>/api/health` | `{"status":"ok","opensearch":"green","index_docs":732}` |
+| `https://<ip>/api/me`(로그인 없이) | 401 |
+| `http://<ip>/` | 308 → `https://<ip>/` (Caddy의 자동 이동) |
+| `https://<ip>:9200/` | HTTP 000, curl 종료 코드 7(연결 안 됨) — 밖에서 닫혀 있음. 이 PC 한 곳에서만 본 것 |
+
+**자동 갱신은 아직 관측하지 못했다.** 확인된 것은 두 가지뿐이다: (1) 로그에 `started background certificate maintenance`(Caddy가 인증서를 백그라운드에서 관리), (2) 발급 직후 Let's Encrypt가 알려 준 **갱신 권장 시간대(ACME Renewal Information)**가 로그에 찍혔다 — 시작 2026-11-22 07:39:48 UTC(발급 +77.9시간) ~ 끝 2026-11-22 10:50:38 UTC(+81.1시간). 만료(+159.0시간)보다 약 3일 앞이다. 그래서 **2026-11-22 10:50 UTC(한국 시각 19:50) 이후** 같은 `openssl` 명령으로 `notBefore`가 바뀌었는지 보면 갱신이 실제로 되었는지 알 수 있다. 그 전에는 "갱신이 예약됐다"까지만 말할 수 있다.
+
+## 5. 서버에서 확인할 것
 
 | 항목 | 방법 | 결과 |
 |---|---|---|
-| 서버에 Caddy가 이미 있는가, 버전은 | `caddy version`, `apt-cache policy caddy` | 측정 전 |
-| 80·443 포트가 밖에서 닿는가 | PC에서 `curl -m 5 http://<server-ip>` | 측정 전 |
-| Caddy가 IP 인증서를 받는가 | `echo \| openssl s_client -connect <server-ip>:443 \| openssl x509 -noout -issuer -enddate` | 측정 전 |
-| 인증서 유효기간이 약 160시간인가 | 위 명령의 `notAfter` − 발급 시각 | 측정 전 |
-| **자동 갱신이 실제로 도는가** | 발급 약 3일 뒤 Caddy 로그에서 갱신 기록 확인 | **발급 직후에는 확인할 수 없다.** 3~6일 뒤 다시 본다 |
-| 위조 `X-Forwarded-For` 무시 | PC에서 `X-Forwarded-For` 헤더를 붙여 `test`로 질문, 횟수가 헤더 값이 아니라 실제 IP로 세어지는지 | 측정 전 |
-| SSE가 모이지 않고 바로 오는가 | 채팅 응답에서 진행 이벤트가 하나씩 도착하는지 | 측정 전 |
+| 서버에 Caddy가 이미 있는가, 버전은 | `caddy version`, `apt-cache policy caddy` | **없었다**(apt 후보 2.6.2). 공식 저장소에서 v2.11.9 설치(4-2의 11) |
+| 80·443 포트가 밖에서 닿는가 | PC에서 `curl` | **확인됨(2026-11-19).** 80 → 200, 443 → 200(인증서 검증 통과). 이 PC 한 곳에서만 본 것 |
+| Caddy가 IP 인증서를 받는가 | `openssl s_client … \| openssl x509 -noout -issuer -enddate` | **확인됨.** Let's Encrypt `YE1`, v2.11.9, IPv4, 첫 시도 성공 |
+| 인증서 유효기간이 약 160시간인가 | `notAfter` − `notBefore` | **확인됨.** 159.9997시간 |
+| **자동 갱신이 실제로 도는가** | 갱신 권장 시간대(2026-11-22 07:39~10:50 UTC) 이후 `notBefore` 변화 확인 | **아직 모름.** 예약됐다는 로그만 있다. 2026-11-22 10:50 UTC 이후 다시 본다 |
+| 위조 `X-Forwarded-For` 무시 | PC에서 `X-Forwarded-For` 헤더를 붙여 `test`로 질문, 횟수가 헤더 값이 아니라 실제 IP로 세어지는지 | 측정 전 (Step 7) |
+| SSE가 모이지 않고 바로 오는가 | 채팅 응답에서 진행 이벤트가 하나씩 도착하는지 | 측정 전 (Step 7) |
 | `$`가 든 해시가 서버 `.env`에서 변형 없이 읽히는가 | 앱이 시작되면 통과(시작할 때 해시 형식을 검사한다) | **확인됨(2026-11-19).** 앱이 읽은 해시가 bcrypt 형식·60자이고 서비스가 시작됐다(4-1의 8·9). 실제 로그인은 Step 7에서 본다 |
-| 9200 포트가 밖에서 닫혀 있는가 | PC에서 `curl -m 5 https://<server-ip>:9200` 이 실패 | 측정 전 |
+| 9200 포트가 밖에서 닫혀 있는가 | PC에서 `curl -m 5 https://<server-ip>:9200` 이 실패 | **확인됨.** HTTP 000, 종료 코드 7. 이 PC 한 곳에서만 본 것 |
 | 피드백 점수 쓰기(Langfuse v3 제거 뒤) | 실제 👍 한 번 후 Langfuse에서 점수 확인 | 측정 전 |
