@@ -42,8 +42,18 @@ def sentence(text: str, ids: list[str] | None = None, kind: str = "evidence") ->
         (state(verification=V_VERDICT, llm_calls=5), "regenerate"),  # 사건 판단 문장이 있으면 다시 쓴다
         (state(verification=V_BAD, regen_count=2, research_count=2, llm_calls=6), "refuse"),  # 시도 한도 소진
         (state(violations=[BAD_CITATION], llm_calls=8), "refuse"),  # 호출 상한 소진
+        # 마지막(8번째) 호출이 검증이고 그것이 통과했다면 답은 나간다. 통과 판정에는 호출이 더 필요 없기 때문이다.
+        # (예전에는 상한 검사가 먼저라서 검증까지 끝난 답이 "한도" 거절로 바뀌었다. 검토 지적 I-2)
+        (state(verification=V_OK, llm_calls=8), "pass"),
+        # 아래 셋은 위 수정이 느슨해지지 않게 지킨다: 8번째 호출에서도 다시 쓰기·다시 찾기가 필요한 경우는 여전히 거절이다.
+        (state(verification=V_VERDICT, llm_calls=8), "refuse"),
+        (state(verification=V_BAD, sufficient=False, llm_calls=8), "refuse"),
+        (state(verification=None, llm_calls=8), "refuse"),
     ],
-    ids=["code-violation", "pass", "unsupported+insufficient", "verdict", "exhausted", "out-of-budget"],
+    ids=[
+        "code-violation", "pass", "unsupported+insufficient", "verdict", "exhausted", "out-of-budget",
+        "pass-on-the-last-call", "verdict-on-the-last-call", "unsupported-on-the-last-call", "no-verification-on-the-last-call",
+    ],
 )
 def test_decide_table(st, expected):
     assert decide(st, settings_factory()) == expected

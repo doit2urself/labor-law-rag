@@ -106,19 +106,21 @@ def decide(state: GraphState, settings: Settings) -> Literal["pass", "regenerate
     """검증(또는 코드 검사) 뒤의 갈림길: 통과 / 다시 쓰기 / 다시 찾기 / 거절.
 
     판단 순서(위에서부터 먼저 맞는 것):
-    1. LLM 호출 상한을 다 썼으면 거절.
-    2. 코드 검사 위반이 있으면(이때 LLM 검증은 건너뛰었다) 다시 쓴다. 인용 ID 오류는 문서가 아니라 답변 쪽 문제라서
+    1. 코드 검사 위반이 있으면(이때 LLM 검증은 건너뛰었다) 다시 쓴다. 인용 ID 오류는 문서가 아니라 답변 쪽 문제라서
        재검색은 하지 않는다. 다시 쓸 수 없으면 거절.
-    3. 검증 결과가 없으면 거절 — 검증 안 된 답변은 나가지 않는다(실패에 닫힘).
-    4. 사건 판단 문장이 있으면 다시 쓴다(안 되면 거절). 결론 문장이 나가면 안 된다.
-    5. 모든 문장이 일치하면 통과.
-    6. 불일치가 있으면: 문서가 부족하다고 본 경우(`sufficient`가 거짓, verify_node가 정한다)에는 다시 찾고,
+    2. 검증 결과가 없으면 거절 — 검증 안 된 답변은 나가지 않는다(실패에 닫힘).
+    3. 사건 판단 문장이 있으면 다시 쓴다(안 되면 거절). 결론 문장이 나가면 안 된다.
+    4. 모든 문장이 일치하면 통과.
+    5. 불일치가 있으면: 문서가 부족하다고 본 경우(`sufficient`가 거짓, verify_node가 정한다)에는 다시 찾고,
        그렇지 않으면 같은 문서로 다시 쓴다. 둘 다 못 하면 거절.
     "다시 쓰기/다시 찾기"는 횟수 한도(max_regen/max_research)와 호출 예산 여유(budget.py)를 모두 만족해야 한다.
+
+    호출 예산은 **더 호출해야 하는 선택지**(다시 쓰기·다시 찾기)에만 걸린다. "통과"는 호출이 더 필요 없으므로 마지막(8번째)
+    호출이 검증이었어도 그 검증이 통과했다면 답은 나간다. 예전에는 "상한을 다 썼으면 거절"이 맨 앞에 있어서, 검증까지 끝난
+    답이 "처리 횟수 소진" 거절로 바뀌었다(최종 검토 지적 I-2). 예산이 바닥났을 때 거절이 나오는 경우는 그대로다:
+    can_regenerate·can_research가 둘 다 거짓이면 위 갈래들이 모두 "거절"로 끝난다.
     """
     llm_calls = state.get("llm_calls", 0)
-    if llm_calls >= settings.max_llm_calls:
-        return "refuse"
     can_regenerate = state.get("regen_count", 0) < settings.max_regen and has_room(llm_calls, settings, ANSWER_CALLS)
     can_research = state.get("research_count", 0) < settings.max_research and has_room(
         llm_calls, settings, 1 + ANSWER_CALLS

@@ -13,10 +13,11 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app.domain.errors import QuotaExceeded
-from app.domain.models import GeneratedAnswer, Hit, SentenceOut
+from app.domain.models import GeneratedAnswer, Hit, SentenceOut, Verification
 from app.graph.build import build_graph
 from app.graph.nodes_analyze import Analysis
 from app.graph.nodes_answer import VERDICT_PREFACE
+from app.graph.nodes_search import Refined
 from app.graph.nodes_verify import refusal_message
 from app.graph.runner import (
     AnswerDelta,
@@ -205,6 +206,24 @@ def test_total_llm_calls_never_exceed_budget():
     events, _, _ = run(deps, "q")
     assert deps.llm.call_count <= 8
     assert events[-1].payload["refused"] is True and events[-1].payload["preface"] == refusal_message("limit", COVERED_LAWS)
+
+
+# 호출 예산(8회)을 정확히 다 쓴 마지막 검증이 통과했다면 그 답은 나간다. 재검색 1회 + 재생성 1회까지 거친 뒤의 정상 경로이며,
+# 예전에는 이 답이 버려지고 "끝까지 확인하지 못해 답변하지 않습니다"(한도 거절)가 나갔다. 호출 순서:
+# 분석, 생성, 검증(불일치), 검색어 다시 만들기, 생성, 검증(불일치), 생성, 검증(통과) = 8회. (검토 지적 I-2)
+def test_answer_verified_on_the_last_budgeted_call_is_delivered():
+    answer = GeneratedAnswer(
+        sentences=[SentenceOut(text="주휴수당은 유급휴일에 대한 임금입니다.", citation_ids=["doc1"], kind="evidence")]
+    )
+    bad = Verification(sentences_ok=[False], verdict_found=False, notes="근거 불일치")
+    ok = Verification(sentences_ok=[True], verdict_found=False, notes="")
+    llm = FakeLlm(
+        [Analysis(rewritten_query="주휴수당 지급 요건", qclass="counsel"), answer, bad, Refined(query="새 검색어"), answer, bad, answer, ok]  # type: ignore[arg-type]
+    )
+    events, _, _ = run(deps_with(llm), "q")
+    assert llm.call_count == 8
+    assert isinstance(events[-1], Final) and events[-1].payload["refused"] is False
+    assert events[-1].payload["preface"] != refusal_message("limit", COVERED_LAWS)
 
 
 # --- 다시 쓰기·다시 찾기 ------------------------------------------------------------------------------
