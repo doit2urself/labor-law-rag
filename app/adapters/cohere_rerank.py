@@ -30,11 +30,19 @@ class CohereReranker:
 
     client: 테스트에서 가짜 클라이언트를 넣는 자리. 없으면 진짜 `cohere.ClientV2`를 만든다.
     (진짜 클라이언트를 만들 때는 네트워크를 쓰지 않는다. 호출할 때만 쓴다.)
+    timeout_s: 요청 하나의 제한 시간(초). 없으면 라이브러리 기본값(300초)이다. 웹 서비스는 Settings.rerank_timeout_s를 넘긴다 —
+        응답이 느린 리랭커 때문에 폴백(RRF 상위 5개)이 몇 분 뒤에야 시작되지 않게 하려는 것이다(최종 검토 지적 I-1).
+
+    라이브러리 자체 재시도는 요청마다 끈다(`max_retries: 0`). Cohere 라이브러리는 429·5xx에서 기본 2번 더 보내는데, 한도 게이트는 시도를
+    1회로 세므로 월 호출 수가 실제보다 적게 세어지고, 분당 10회 제한에 걸렸을 때 폴백이 늦어진다. 재시도 여부는 게이트가 한 곳에서 정한다.
     """
 
-    def __init__(self, api_key: str, model: str = DEFAULT_RERANK_MODEL, client: Any = None) -> None:
+    def __init__(
+        self, api_key: str, model: str = DEFAULT_RERANK_MODEL, client: Any = None, *, timeout_s: float | None = None
+    ) -> None:
         self._model = model
-        self._client = client if client is not None else cohere.ClientV2(api_key=api_key)
+        self._timeout_s = timeout_s
+        self._client = client if client is not None else cohere.ClientV2(api_key=api_key, timeout=timeout_s)
 
     def rerank(self, query: str, hits: list[Hit], top_n: int) -> list[Hit]:
         """후보 중 질문과 관련성이 높은 `top_n`개를 점수 높은 순으로 돌려준다.
@@ -50,6 +58,7 @@ class CohereReranker:
                 query=query,
                 documents=[hit.chunk.text for hit in hits],
                 top_n=top_n,
+                request_options={"max_retries": 0},
             )
         except cohere.TooManyRequestsError as exc:  # ApiError의 하위 클래스라서 반드시 먼저 잡는다.
             raise QuotaExceeded(str(exc)) from exc

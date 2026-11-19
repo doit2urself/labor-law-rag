@@ -82,6 +82,10 @@ class GeminiEmbedder:
     sleep·backoff_s·max_wait_s: 재시도 사이의 대기. 서버가 알려 준 대기 시간(retryDelay)이 있으면 그만큼,
     없으면 backoff_s에서 두 배씩 늘린다. 대기가 max_wait_s보다 길면 붙잡혀 있지 않고 바로 QuotaExceeded를 낸다
     (무료 한도의 일 단위 소진처럼 기다려도 소용없는 경우 파이프라인이 멈춰 서는 것을 막는다).
+    기본값(3회·60초)은 색인용이다. 웹 요청용은 서비스 조립(container.py)이 LLM과 같은 값(2회·20초)으로 줄여서 만든다 —
+    무료 한도가 소진된 순간 사용자가 임베딩 단계에서 수 분을 기다리지 않게 하려는 것이다(최종 검토 지적 M-2).
+    timeout_s: 요청 하나의 제한 시간(초). 없으면(색인용) 제한하지 않는다 — 큰 묶음을 오래 기다려야 할 수 있어서다.
+    google-genai의 `HttpOptions.timeout`은 **밀리초**라서 여기서 바꿔 넘긴다.
     """
 
     def __init__(
@@ -96,6 +100,7 @@ class GeminiEmbedder:
         sleep: Callable[[float], None] = time.sleep,
         backoff_s: float = 1.0,
         max_wait_s: float = 60.0,
+        timeout_s: float | None = None,
     ) -> None:
         self.model = model
         self.dim = dim
@@ -106,6 +111,7 @@ class GeminiEmbedder:
         self._sleep = sleep
         self._backoff_s = backoff_s
         self._max_wait_s = max_wait_s
+        self._timeout_s = timeout_s
         self.quota_errors = 0  # 지금까지 받은 한도 초과(429) 횟수. 색인 보고서(docs/step0-report.md)에 적는다.
         # task_type은 일부러 비워 둔다: embedding-2는 지원하지 않는다.
         self._config = types.EmbedContentConfig(output_dimensionality=dim)
@@ -115,7 +121,10 @@ class GeminiEmbedder:
         if self._client is None:
             from google import genai
 
-            self._client = genai.Client(api_key=self._api_key)
+            options: dict[str, Any] = {}
+            if self._timeout_s is not None:
+                options["http_options"] = types.HttpOptions(timeout=int(self._timeout_s * 1000))
+            self._client = genai.Client(api_key=self._api_key, **options)
         return self._client
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
@@ -207,6 +216,9 @@ class GeminiLlm:
     sleep·backoff_s·max_wait_s: 재시도 사이의 대기. 서버가 알려 준 대기 시간(retryDelay)이 있으면 그만큼, 없으면
         backoff_s에서 두 배씩 늘린다. 대기가 max_wait_s보다 길면 기다리지 않고 바로 QuotaExceeded를 낸다 — 웹 요청 하나가
         몇 분씩 매달리면 안 되기 때문이다. 기본 20초는 측정한 값이 아닌 시작값이다(실제 429의 retryDelay는 아직 못 봤다).
+    timeout_s: 요청 하나의 제한 시간(초). LangChain의 `timeout`은 초 단위이고 내부에서 밀리초로 바꾼다. 없으면 제한하지 않는다
+        (LangChain 기본값). 웹 서비스는 Settings.llm_timeout_s를 넘겨서, 응답이 멈춘 호출이 요청 스레드를 계속 붙잡지 않게 한다.
+        시간이 지나면 httpx/SDK의 시간 초과 예외가 `_EXTERNAL_ERRORS`에 걸려 ExternalServiceError로 바뀐다(한도 초과가 아니므로 재시도 없음).
 
     last_usage: 가장 최근 호출의 토큰 사용량(`{"input_tokens":…, "output_tokens":…, "total_tokens":…}`), 없으면 None.
         Langfuse 콜백은 이것과 별개로 LangChain 응답에서 사용량을 직접 가져가므로, 이 속성은 점검·측정용 보조 기록이다.
@@ -224,6 +236,7 @@ class GeminiLlm:
         sleep: Callable[[float], None] = time.sleep,
         backoff_s: float = 1.0,
         max_wait_s: float = 20.0,
+        timeout_s: float | None = None,
     ) -> None:
         if max_retries < 1:
             raise ValueError("max_retries는 1 이상이어야 합니다(총 시도 횟수)")
@@ -234,6 +247,7 @@ class GeminiLlm:
         self._sleep = sleep
         self._backoff_s = backoff_s
         self._max_wait_s = max_wait_s
+        self._timeout_s = timeout_s
         self.last_usage: dict | None = None
         self.quota_errors = 0
 
@@ -246,7 +260,9 @@ class GeminiLlm:
         temperature는 지정하지 않는다: Gemini 3 이상에서는 지정하지 않으면 LangChain이 모델 기본값을 쓴다.
         """
         if self._client is None:
-            self._client = ChatGoogleGenerativeAI(model=self.model, api_key=self._api_key, max_retries=1)
+            self._client = ChatGoogleGenerativeAI(
+                model=self.model, api_key=self._api_key, max_retries=1, timeout=self._timeout_s
+            )
         return self._client
 
     def complete_json(

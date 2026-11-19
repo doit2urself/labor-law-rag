@@ -71,11 +71,18 @@ def test_reranker_sorts_by_score_even_if_response_is_unsorted():
     assert [h.chunk.article_no for h in out] == ["2", "3", "1"]
 
 
-# 요청에는 모델 이름, 질문, 후보 본문(청크 text), top_n이 그대로 실린다.
+# 요청에는 모델 이름, 질문, 후보 본문(청크 text), top_n이 그대로 실린다. 라이브러리 자체 재시도를 끄는 `request_options`도 함께 간다
+# (한도 게이트가 시도를 1회로 세므로 재시도는 게이트 한 곳에서만 판단한다. 최종 검토 지적 I-1).
 def test_reranker_sends_model_query_documents_and_top_n():
     client = FakeCohereClient(results=[(0, 0.5)])
     CohereReranker("k", model="rerank-x", client=client).rerank("질문", hits20()[:2], top_n=1)
-    assert client.last_kwargs == {"model": "rerank-x", "query": "질문", "documents": ["본문 1", "본문 2"], "top_n": 1}
+    assert client.last_kwargs == {
+        "model": "rerank-x",
+        "query": "질문",
+        "documents": ["본문 1", "본문 2"],
+        "top_n": 1,
+        "request_options": {"max_retries": 0},
+    }
 
 
 # 기본 모델 이름은 Cohere 공식 문서의 Rerank 5 목록에 있는 `rerank-v5.0-pro`다.

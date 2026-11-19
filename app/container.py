@@ -55,10 +55,21 @@ def build_deps(settings: Settings, store: AppStore, tracing: Tracing | None = No
     """
     client = make_client(settings.opensearch_url, settings.opensearch_user, settings.opensearch_password)
     return GraphDeps(
-        llm=GeminiLlm(settings.gemini_api_key, settings.llm_model),
-        embedder=GeminiEmbedder(settings.gemini_api_key, model=settings.embedding_model, dim=settings.embedding_dim),
+        llm=GeminiLlm(settings.gemini_api_key, settings.llm_model, timeout_s=settings.llm_timeout_s),
+        # 웹 요청용 임베더: 재시도는 LLM과 같은 값(총 2회, 대기 최대 20초)으로 줄이고 제한 시간을 건다. 기본값(3회·60초)은 색인용이라
+        # 그대로 쓰면 무료 한도가 소진된 순간 사용자가 임베딩 단계에서 최대 약 2분을 기다린다(최종 검토 지적 M-2).
+        embedder=GeminiEmbedder(
+            settings.gemini_api_key,
+            model=settings.embedding_model,
+            dim=settings.embedding_dim,
+            max_retries=2,
+            max_wait_s=20.0,
+            timeout_s=settings.embedding_timeout_s,
+        ),
         search=OpenSearchStore(client, settings.index_name, depth=settings.search_depth),
-        rerank=RerankGate(CohereReranker(settings.cohere_api_key), store, cap=settings.rerank_monthly_cap),
+        rerank=RerankGate(
+            CohereReranker(settings.cohere_api_key, timeout_s=settings.rerank_timeout_s), store, cap=settings.rerank_monthly_cap
+        ),
         settings=settings,
         covered_laws=list(COVERED_LAWS),
         sink=tracing.record_event if tracing is not None else None,
