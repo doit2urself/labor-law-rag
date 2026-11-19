@@ -1,0 +1,51 @@
+# 근로·노동 상담 RAG API를 서버에서 실행하는 systemd 유닛 (Task 18).
+# 설치 위치: /etc/systemd/system/labor-rag.service  →  systemctl daemon-reload && systemctl enable --now labor-rag
+#
+# 상태: 파일만 준비했고 **서버에서 아직 실행해 보지 않았다**(2026-11-19). 서버에서 켜 본 결과는 deploy/web-server-notes.md에 적는다.
+#
+# 전제(배포 절차에서 만든다):
+#   - 코드와 가상환경: /opt/labor-rag (소유자 labor), 가상환경은 /opt/labor-rag/.venv
+#   - 비밀 값: /opt/labor-rag/.env (소유자 labor, 권한 600). 아래 설명처럼 이 유닛은 .env를 직접 읽지 않는다.
+#   - 데이터(SQLite 두 개): /opt/labor-rag/data
+
+[Unit]
+Description=Labor consultation RAG API (uvicorn, 1 worker)
+# OpenSearch가 먼저 뜨면 좋지만 필수는 아니다: Wants는 "같이 켜 주되 실패해도 계속"이다(Requires면 OpenSearch가 죽을 때
+# 이 서비스도 같이 멈춘다). 앱은 OpenSearch가 없어도 시작하고, /api/health가 "down"이라고 알려 준다.
+Wants=network-online.target opensearch.service
+After=network-online.target opensearch.service
+
+[Service]
+Type=simple
+User=labor
+Group=labor
+
+# 작업 폴더를 /opt/labor-rag로 두면 앱의 설정(app/config.py의 env_file=".env")이 같은 폴더의 .env를 직접 읽는다.
+# EnvironmentFile을 쓰지 않은 이유: 비밀번호 해시(`$2b$12$…`)에 `$`가 들어 있는데, systemd가 그것을 변형 없이 읽는지는 확인하지
+# 못했다. 앱이 직접 읽는 방식은 시험으로 확인했다(tests/test_make_password_hash.py의 .env 왕복 시험).
+WorkingDirectory=/opt/labor-rag
+
+# --factory: create_app()을 인자 없이 불러 앱을 만든다(필수 설정이 빠졌으면 시작할 때 멈춘다).
+# --workers 1: 반드시 1개(로그인 시도 기록이 프로세스 메모리에 있고, SQLite를 한 프로세스가 쓰는 설계다. deploy/api-notes.md).
+# --host 127.0.0.1: 웹서버(Caddy)만 접근한다. 인터넷에 직접 열지 않는다.
+# --no-proxy-headers: uvicorn이 X-Forwarded-For로 접속 주소를 바꿔 쓰는 기능을 끈다. IP를 읽는 규칙은 앱(app/api/limits.py의
+#   client_ip)이 한 곳에서 맡는다 — 접속 주소가 신뢰하는 프록시(127.0.0.1)일 때만 헤더를 읽고 오른쪽부터 걷는다.
+ExecStart=/opt/labor-rag/.venv/bin/uvicorn app.api.main:create_app --factory --host 127.0.0.1 --port 8000 --workers 1 --no-proxy-headers
+
+Restart=on-failure
+RestartSec=5
+
+# 로그는 journald로 간다: journalctl -u labor-rag -f
+# 파이썬이 출력을 모아 두지 않고 바로 내보내게 한다(로그가 늦게 보이지 않도록).
+Environment=PYTHONUNBUFFERED=1
+
+# --- 권한을 줄이는 설정(이 서비스가 뚫려도 서버 전체로 번지지 않게) ---
+# 운영체제 영역과 홈 폴더는 읽기 전용/접근 불가로 두고, 쓸 수 있는 곳은 data 폴더(SQLite)뿐이다.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/labor-rag/data
+
+[Install]
+WantedBy=multi-user.target
