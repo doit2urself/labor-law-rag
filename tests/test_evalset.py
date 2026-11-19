@@ -145,3 +145,67 @@ def test_shipped_gold_articles_exist_in_the_parsed_law_files():
 
     known = {(c.law_name, c.article_no) for c in load_law_chunks(LAW_DIR)}
     assert check_gold_exists(shipped(), known) == []
+
+
+# --- 어려운 거절 질문(eval/evalset_hard.jsonl): 근로 분야인데 수집한 법령에 답이 없는 질문 (Task 17 후속) ---
+# 메인 평가셋(40건)에는 더하지 않는다: 거절 질문 비율을 10~20%로 묶은 위 규칙(스펙 6.8)이 깨지기 때문이다.
+HARD_PATH = Path(__file__).resolve().parent.parent / "eval" / "evalset_hard.jsonl"
+
+
+def hard() -> list[EvalItem]:
+    return load_evalset(HARD_PATH)
+
+
+# 커밋된 파일이 eval/drafts.py의 원본과 같다(손으로 고친 파일이 원본과 어긋나는 일을 막는다).
+def test_shipped_hard_evalset_matches_its_source():
+    from eval.drafts import build_hard_evalset
+
+    assert hard() == build_hard_evalset()
+
+
+# 모두 거절 대상 라벨(근거 없음 또는 범위 밖)이고 정답 조문이 없으며, 두 가지 문장이 다 있고, 규칙 검사를 통과한다.
+def test_hard_evalset_items_are_refusal_targets_with_both_phrasings():
+    items = hard()
+    assert len(items) >= 10
+    assert all(i.label in ("no_evidence", "out_of_scope") and not i.gold for i in items)
+    assert all(i.question.strip() and (i.casual_question or "").strip() for i in items)
+    assert validate_items(items, set(COVERED_LAWS)) == []
+
+
+# 메인 평가셋과 id가 겹치지 않는다(결과 파일을 합쳐 볼 때 섞이지 않게).
+def test_hard_item_ids_do_not_clash_with_the_main_evalset():
+    assert not {i.id for i in hard()} & {i.id for i in shipped()}
+
+
+# "코퍼스에 답이 없다"는 주장의 근거: 각 질문의 핵심 용어가 파서가 읽은 청크 어디에도 없다. 법령 파일이 바뀌면 이 시험이 알려 준다.
+@pytest.mark.skipif(not LAW_DIR.is_dir(), reason="data/manual(법령 파일)이 이 PC에 없다")
+def test_hard_item_key_terms_are_absent_from_the_corpus():
+    from eval.drafts import HARD_ABSENT_TERMS
+    from scripts.build_index import load_law_chunks
+
+    chunks = load_law_chunks(LAW_DIR)
+    # "근거 없음" 항목(h)에는 모두 "없다고 확인한 용어"가 있다. 장난·엉뚱 입력(x)은 근로 분야가 아니라서 용어 확인 대상이 아니다.
+    assert set(HARD_ABSENT_TERMS) == {i.id for i in hard() if i.label == "no_evidence"}
+    for item_id, terms in HARD_ABSENT_TERMS.items():
+        assert terms, item_id
+        for term in terms:
+            assert not [c for c in chunks if term in c.text], f"{item_id}: '{term}'이(가) 코퍼스에 있다"
+
+
+# --hard 명령은 어려운 질문 파일을 만들고, 이미 있으면 덮어쓰지 않는다.
+def test_drafts_cli_writes_the_hard_set_and_refuses_to_overwrite(tmp_path, capsys):
+    from eval.drafts import build_hard_evalset, main
+
+    out = tmp_path / "hard.jsonl"
+    assert main(["--hard", "--out", str(out)]) == 0
+    assert load_evalset(out) == build_hard_evalset()
+    assert main(["--hard", "--out", str(out)]) == 1
+    assert "덮어쓰지" in capsys.readouterr().out
+
+
+# 장난·엉뚱 입력(x01~)은 "범위 밖" 라벨이고, 웃음·무의미한 글자·욕설·지시 무시 시도·근로와 엉뚱한 것이 섞인 입력을 모두 포함한다.
+def test_hard_evalset_includes_joke_and_prompt_injection_inputs():
+    odd = [i for i in hard() if i.id.startswith("x")]
+    assert len(odd) >= 6 and all(i.label == "out_of_scope" for i in odd)
+    texts = " ".join(i.casual_question or "" for i in odd)
+    assert "무시" in texts and "ㅋㅋ" in texts  # 지시 무시 시도와 웃음 입력이 들어 있다
