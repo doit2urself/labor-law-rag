@@ -18,5 +18,8 @@ frontend/node_modules/
 # 실행 원장(executing-plans 작업공간)
 .superpowers/
 
+# 코딩 도구용 작업 지침(이 PC에서만 쓴다. 공개 저장소에는 올리지 않는다)
+CLAUDE.md
+
 # 프런트엔드 빌드 결과(웹서버가 서빙하는 정적 파일, 배포 때 새로 만든다)
 frontend/dist/
