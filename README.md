@@ -26,7 +26,7 @@
 | 질문당 LLM 호출 (평균) | **2.73회** (상한 8회) | — |
 
 **이 숫자를 읽을 때 알아둘 점** — 평가 질문은 조문을 읽고 만든 초안이고, **사람이 확인한 건수는 0건**입니다.
-정답 조문이 질문을 만들 때 쓴 조문이라 실제보다 점수가 높게 나올 수 있습니다. 자세한 한계는 [아래](#한계--아직-모르는-것)에 있습니다.
+정답 조문이 질문을 만들 때 쓴 조문이라 실제보다 점수가 높게 나올 수 있습니다. 측정 기록 전체는 [`docs/results.md`](docs/results.md)에 있습니다.
 
 ## 질문 하나가 지나가는 길
 
@@ -74,16 +74,6 @@ flowchart LR
 - **일상어로 물으면 검색이 확 어려워집니다.** 정답이 후보 20개 안에는 들어오지만 1등으로 오는 경우가 크게 줄었습니다(MRR 0.96 → 0.50).
 - **리랭커가 그 순위를 되살렸습니다**(0.50 → 0.88). 단, 리랭크 MRR은 상위 5개 안에서, RRF MRR은 상위 20개 안에서 셌습니다.
 
-## 한계 — 아직 모르는 것
-
-| 항목 | 상태 |
-|---|---|
-| 사람 검수 | 평가 질문·라벨 모두 **사람이 확인한 건수 0건**. 검증기(LLM)의 정확도는 아직 모릅니다 |
-| 반복 측정 | 서버 평가는 한 번씩만 돌렸습니다. 0.97(1건 차이)이 변동인지 차이인지 구분하지 못합니다 |
-| 첫 질문 지연 | 서버 평가의 첫 질문이 72.66초 걸렸고 원인을 모릅니다(나머지 39건은 5.86초 이하) |
-| 핵심을 못 찾은 답변 | 관련은 있지만 핵심이 아닌 조문만 찾으면, “핵심은 확인되지 않는다”를 **마지막 문장**에 둡니다. 앞 문장만 읽으면 답을 얻은 것처럼 보일 수 있습니다(`docs/step0-report.md` 13절, 고치지 않음) |
-| 문서 범위 | 법령 6종(근로기준법, 최저임금법, 근로자퇴직급여 보장법, 기간제법, 남녀고용평등법, 임금채권보장법)의 법률·시행령·시행규칙, 현행 조문만. 판례·행정해석은 없습니다 |
-
 ## 기술 스택
 
 | 영역 | 사용한 것 |
@@ -100,38 +90,6 @@ flowchart LR
 **비용:** API·관측은 모두 무료 등급으로 설계했습니다. Langfuse 무료 한도(월 50,000 units) 중 답변한 질문 하나가 51 units, 거절한 질문 하나가 약 17 units를 씁니다(`docs/results.md`). 서버는 이미 쓰고 있던 VPS입니다.
 
 구조는 포트·어댑터 방식입니다. 그래프는 `app/ports.py`의 약속(인터페이스)만 알고, 진짜 부품(Gemini·OpenSearch·Cohere)은 `app/container.py` 한 곳에서 끼웁니다. 그래서 테스트는 가짜 부품으로 네트워크 없이 돕니다.
-
-## 로컬에서 실행
-
-준비물: Python 3, Node, OpenSearch(Nori 플러그인), Gemini·Cohere·Langfuse 키.
-법령 파일은 저장소에 없습니다. 국가법령정보센터에서 위 6개 법령의 법률·시행령·시행규칙 18개를 “저장”(.doc)으로 받아 `data/manual/`에 둡니다.
-
-```powershell
-# 1) 의존성
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-npm --prefix frontend install
-
-# 2) 설정: .env.example을 .env로 복사하고 값을 채운다 (비밀번호는 해시만 넣는다)
-copy .env.example .env
-.\.venv\Scripts\python.exe scripts\make_password_hash.py --account admin
-
-# 3) 테스트 (네트워크·키 불필요)
-.\.venv\Scripts\python.exe -m pytest
-npm --prefix frontend test
-
-# 4) 색인: 법령 파일 → 조문 청크 732개 → 임베딩 → OpenSearch
-.\.venv\Scripts\python.exe scripts\build_index.py --dry-run   # 청크 수만 센다
-.\.venv\Scripts\python.exe scripts\build_index.py
-
-# 5) 실행 (workers는 반드시 1 — 이유는 deploy/api-notes.md)
-npm --prefix frontend run build
-.\.venv\Scripts\python.exe -m uvicorn app.api.main:create_app --factory --host 127.0.0.1 --port 8000 --workers 1
-
-# 6) 평가
-.\.venv\Scripts\python.exe -m eval.run_retrieval --rerank   # 검색만
-.\.venv\Scripts\python.exe -m eval.run_eval                 # 끝에서 끝까지
-```
 
 ## 더 읽을 거리
 
