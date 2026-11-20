@@ -10,7 +10,8 @@
 - 계획(18 Task, Native 실행): `docs/superpowers/plans/2026-11-18-labor-rag-v1.md`
 - 근거 자료: `docs/research/2026-11-17-rag-v1-design-review.md`
 - 기억 파일(비밀 없음): 자동으로 읽히는 `MEMORY.md`가 가리키는 `llm-portfolio-rag-project.md`
-- git: `main`은 문서만 담은 기준 커밋, 구현은 `v1` 브랜치에서 한다. 이 저장소 안에서 작성자는 `doit2urself`.
+- git: 18개 Task가 모두 끝나 `v1`은 `main`에 병합되고 삭제되었다(2026-11-20). 이후 변경은 `main`에서 새 브랜치를 따서 한다. 이 저장소 안에서 작성자는 `doit2urself`.
+- 상태: 서버(Contabo)에 HTTPS로 배포되어 운영 중이다. 서버 기록은 `deploy/web-server-notes.md`, 측정은 `docs/results.md`, 판단 131건은 `docs/rulings.md`.
   원격 저장소를 만들거나 push하는 일은 사용자가 이름과 공개 여부를 말하기 전에는 하지 않는다.
 
 ## 항상 지킬 규칙
